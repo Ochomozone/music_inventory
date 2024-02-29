@@ -4,9 +4,9 @@ const app = express();
 const PORT = process.env.PORT || 4001;
 
 const instrumentsRouter = require('./routes/instruments');
-const dispatchedRouter = require('./routes/dispatched');
+const dispatchesRouter = require('./routes/dispatches');
 const availableInstrumentsRouter = require('./routes/available');
-const issueRouter = require('./routes/instrument_issue');
+const returnInstrumentRouter = require('./routes/returns');
 
 app.use(bodyParser.json());
 app.use(
@@ -21,8 +21,10 @@ app.get('/', (request, response) => {
 
 
 app.use('/instruments', instrumentsRouter);
-app.use('/dispatches', dispatchedRouter);
+app.use('/dispatches', dispatchesRouter);
 app.use('/available', availableInstrumentsRouter);
+app.use('/returns', returnInstrumentRouter);
+
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);

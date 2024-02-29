@@ -111,23 +111,23 @@ const getUserIdByName = async (name) => {
     }
 };
 
-// Function to fetch dispatched instruments filtered by user IDs
-const getDispatchedInstrumentsByUserIds = async (userIds) => {
-    const queryText = `
-        SELECT  description, number, make, model, serial, state, user_name
-        FROM instruments
-        WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
-    `;
+
+const getUserIdByRole = async (role) => {
     try {
-        const { rows } = await pool.query(queryText, userIds);
-        return rows;
+        const queryText = 'SELECT get_user_id_by_role($1) AS user_id';
+        const { rows } = await pool.query(queryText, [role]);
+        if (rows.length === 1 && rows[0].user_id !== null) {
+            return rows[0].user_id;
+        } else {
+            throw new Error('User not found');
+        }
     } catch (error) {
-        console.error('Error fetching dispatched instruments by user IDs:', error);
+        console.error('Error retrieving user ID:', error);
         throw error;
     }
 };
 
-// Function to fetch all available instruments
+
 const getAllAvailableInstruments = async () => {
     const queryText = `
         SELECT  description, number, make, model, serial, state, location
@@ -184,11 +184,34 @@ const createDispatch = async (description, number, userId) => {
     }
 };
 
+const returnInstrument = async (instrumentId) => {
+    try {
+        const current_user = process.env.DB_USER
+        console.log(current_user);
+        console.log(typeof(current_user));
+        const userId = await getUserIdByRole(current_user);
+        console.log(userId);
+        // Insert the return into the database
+        const queryText = `
+            INSERT INTO returns (item_id)
+            VALUES ($1)
+            RETURNING *
+        `;
+        const rows = await query(queryText, [instrumentId]);
+        console.log(rows);
+        return rows; 
+    } catch (error) {
+        console.error('Error creating dispatch:', error);
+        throw error;
+    }
+};
+
 
 
 
 module.exports = { getDispatchedInstrumentsByUserIds, 
                     getInstrumentsByDescription, 
+                    getInstrumentIdByDescriptionNumber,
                     getDispatchedInstruments, 
                     getInstruments, 
                     getInstrumentById,
@@ -196,4 +219,5 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getAllAvailableInstruments,
                     getAvailableInstrumentsByDescription,
                     createDispatch,
+                    returnInstrument,
                     query };
