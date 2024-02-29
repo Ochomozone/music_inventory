@@ -85,6 +85,21 @@ const getDispatchedInstruments = async () => {
     }
 };
 
+const getDispatchedInstrumentsByUserIds = async (userIds) => {
+    const queryText = `
+        SELECT * 
+        FROM dispatched_instruments_view 
+        WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
+    `;
+    try {
+        const { rows } = await pool.query(queryText, userIds);
+        return rows;
+    } catch (error) {
+        console.error('Error fetching dispatched instruments by user IDs:', error);
+        throw error;
+    }
+};
+
 const searchUserByName = async (namePattern) => {
     const queryText = `
     SELECT all_users_view.id
