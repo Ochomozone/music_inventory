@@ -25,7 +25,9 @@ const query = async (text, params) => {
 };
 
 const getInstruments = async () => {
-    const queryText = 'SELECT description, code, number, make, model, serial, location FROM all_instruments_view';
+    const queryText = `SELECT id, description, code, number, make, model, serial, location, user_name  
+                        FROM instruments 
+                        ORDER BY description, number`;
     try {
         const instruments = await query(queryText);
         return instruments;
@@ -36,7 +38,9 @@ const getInstruments = async () => {
 };
 
 const getInstrumentById = async (instrumentId) => {
-    const queryText = 'SELECT description, code, legacy_code, number, make, model, serial, location, user_name FROM instruments WHERE id = $1';
+    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+                        FROM instruments 
+                        WHERE id = $1`;
     try {
         const instrument = await query(queryText, [instrumentId]);
         return instrument;
@@ -64,7 +68,9 @@ const getInstrumentIdByDescriptionNumber = async (description, number) => {
 
 
 const getInstrumentsByDescription = async (description) => {
-    const queryText = 'SELECT description, code, legacy_code, number, make, model, serial, location, user_name FROM instruments WHERE description = $1';
+    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+    FROM instruments WHERE description ILIKE '%'||$1||'%'
+    ORDER BY description, number`;
     try {
         const instrument = await query(queryText, [description]);
         return instrument;
@@ -74,8 +80,25 @@ const getInstrumentsByDescription = async (description) => {
     }
 };
 
+const getInstrumentByNumber = async (description, number) => {
+    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+    FROM instruments 
+    WHERE description ILIKE '%'||$1||'%'
+    AND number = $2
+    ORDER BY description, number`;
+    try {
+        const instrument = await query(queryText, [description, number]);
+        return instrument;
+    } catch (error) {
+        console.error('Error fetching instrument by ID:', error);
+        throw error;
+    }
+};
+
 const getDispatchedInstruments = async () => {
-    const queryText = 'SELECT * FROM dispatched_instruments_view';
+    const queryText = `SELECT * FROM instruments 
+                        WHERE user_id IS NOT NULL
+                        ORDER BY user_name, description, number`;
     try {
         const instruments = await query(queryText);
         return instruments;
@@ -88,8 +111,9 @@ const getDispatchedInstruments = async () => {
 const getDispatchedInstrumentsByUserIds = async (userIds) => {
     const queryText = `
         SELECT * 
-        FROM dispatched_instruments_view 
+        FROM instruments
         WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
+        ORDER BY user_name, description, number
     `;
     try {
         const { rows } = await pool.query(queryText, userIds);
@@ -100,14 +124,29 @@ const getDispatchedInstrumentsByUserIds = async (userIds) => {
     }
 };
 
-const searchUserByName = async (namePattern) => {
+const searchUsersByName = async (userName) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.full_name ILIKE '%' || $1|| '%'
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${userName}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users by name:', error);
+        throw error;
+    }
+};
+
+const searchUserIdsByName = async (userName) => {
     const queryText = `
     SELECT all_users_view.id
     FROM all_users_view
     WHERE all_users_view.full_name ILIKE '%' || $1|| '%'
     `;
     try {
-        const { rows } = await pool.query(queryText, [`%${namePattern}%`]);
+        const { rows } = await pool.query(queryText, [`%${userName}%`]);
         return rows.map(row => row.id);
     } catch (error) {
         console.error('Error searching users by name:', error);
@@ -116,7 +155,7 @@ const searchUserByName = async (namePattern) => {
 };
 
 const getUserIdByName = async (name) => {
-    const users = await searchUserByName(name);
+    const users = await searchUserIdsByName(name);
     if (users.length == 1) {
         return users[0];
     } else if (users.length > 1) {
@@ -142,10 +181,21 @@ const getUserIdByRole = async (role) => {
     }
 };
 
+const getAllUsers = async () => {
+    const queryText = `SELECT * FROM all_users_view`;
+    try {
+        const users = await query(queryText);
+        return users;
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        throw error;
+    }
+};
+
 
 const getAllAvailableInstruments = async () => {
     const queryText = `
-        SELECT  description, number, make, model, serial, state, location
+        SELECT  id, description, number, make, model, serial, state, location
         FROM instruments
         WHERE user_name IS NULL
         AND state IN ('New', 'Good', 'Fair')
@@ -161,7 +211,7 @@ const getAllAvailableInstruments = async () => {
 
 const getAvailableInstrumentsByDescription = async (description) => {
     const queryText = 
-    `SELECT  description, number, make, model, serial, state, location
+    `SELECT  id, description, number, make, model, serial, state, location
         FROM instruments
         WHERE user_name IS NULL
         AND description ILIKE '%' || $1|| '%'
@@ -226,11 +276,15 @@ const returnInstrument = async (instrumentId) => {
 
 module.exports = { getDispatchedInstrumentsByUserIds, 
                     getInstrumentsByDescription, 
+                    getInstrumentByNumber,
                     getInstrumentIdByDescriptionNumber,
                     getDispatchedInstruments, 
                     getInstruments, 
                     getInstrumentById,
-                    searchUserByName, 
+                    getAllUsers,
+                    searchUserIdByName: searchUserIdsByName, 
+                    searchUsersByName,
+                    searchUserIdsByName,
                     getAllAvailableInstruments,
                     getAvailableInstrumentsByDescription,
                     createDispatch,

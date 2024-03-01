@@ -16,7 +16,12 @@ passport.use(new GoogleStrategy({
     callbackURL: "http://localhost:4001/auth/google/callback"
   },
   function(accessToken, refreshToken, profile, done) {
-      return done(null, profile);
+    const email = profile.emails[0].value;
+    const username = email.substring(0, email.indexOf('@'));
+    profile.username = username;
+    profile.name = profile.displayName;
+    profile.email = email;
+    return done(null, profile);
   }
 ));
 
