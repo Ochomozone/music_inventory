@@ -128,13 +128,95 @@ const searchUsersByName = async (userName) => {
     const queryText = `
     SELECT *
     FROM all_users_view
-    WHERE all_users_view.full_name ILIKE '%' || $1|| '%'
+    WHERE all_users_view.full_name ILIKE $1
+    ORDER BY all_users_view.full_name
     `;
     try {
         const { rows } = await pool.query(queryText, [`%${userName}%`]);
         return rows;
     } catch (error) {
         console.error('Error searching users by name:', error);
+        throw error;
+    }
+};
+
+const searchUsersByDivision = async (userDivision) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.division ILIKE $1
+    ORDER BY all_users_view.full_name
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${userDivision}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users by division:', error);
+        throw error;
+    }
+};
+
+const searchUsersByClass = async (classValue) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.class ILIKE $1
+    ORDER BY all_users_view.class ,all_users_view.division, all_users_view.full_name
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${classValue}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users by division:', error);
+        throw error;
+    }
+};
+
+const searchUsersByNameAndDivision = async (userName, userDivision) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.division ILIKE $1
+    AND all_users_view.full_name ILIKE $2
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${userDivision}%`, `%${userName}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users by division:', error);
+        throw error;
+    }
+};
+
+const searchUsersByNameAndClass = async (userName, classValue) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.full_name ILIKE $1
+    AND all_users_view.class ILIKE $2
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${userName}%`, `%${classValue}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users:', error);
+        throw error;
+    }
+};
+
+const searchUsersByDivisionAndClass = async (userDivision, classValue) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.division ILIKE $1
+    AND all_users_view.class ILIKE $2
+    ORDER BY all_users_view.class ,all_users_view.division, all_users_view.full_name
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [`%${userDivision}%`, `%${classValue}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users:', error);
         throw error;
     }
 };
@@ -153,6 +235,7 @@ const searchUserIdsByName = async (userName) => {
         throw error;
     }
 };
+
 
 const getUserIdByName = async (name) => {
     const users = await searchUserIdsByName(name);
@@ -284,6 +367,11 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getAllUsers,
                     searchUserIdByName: searchUserIdsByName, 
                     searchUsersByName,
+                    searchUsersByDivision,
+                    searchUsersByClass,
+                    searchUsersByNameAndDivision,
+                    searchUsersByNameAndClass,
+                    searchUsersByDivisionAndClass,
                     searchUserIdsByName,
                     getAllAvailableInstruments,
                     getAvailableInstrumentsByDescription,

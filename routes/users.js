@@ -4,15 +4,27 @@ const db = require('../db/db.js');
 
 router.get('/', async (req, res) => {
     // Extract query parameters
-    const { userName } = req.query;
+    const { userName, userDivision, classValue } = req.query;
 
     try {
         let userList;
         // If userName query parameter is provided, filterusers by user name
-        if (userName) {
-             userList = await db.searchUsersByName(userName);
-            
-        } else {
+        if (userName && classValue) {
+            userList = await db.searchUsersByNameAndClass(userName, classValue);
+        } else if (userDivision && userName) {
+            userList = await db.searchUsersByNameAndDivision(userName, userDivision);
+        } else if (userDivision && classValue) {
+            userList = await db.searchUsersByDivisionAndClass (userDivision, classValue);
+        }else if (userName ) {
+        userList = await db.searchUsersByName(userName);
+       
+        }else if (userDivision ) {
+            userList = await db.searchUsersByDivision(userDivision);
+           
+        }else if (classValue ) {
+            userList = await db.searchUsersByClass(classValue);
+           
+        }else {
             // Otherwise, fetch all users
             userList = await db.getAllUsers();
         }

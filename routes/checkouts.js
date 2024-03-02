@@ -9,21 +9,25 @@ const db = require('../db/db.js');
 router.get('/', async (req, res) => {
     // Extract query parameters
     const { userName } = req.query;
+    console.log('Query userName:', userName);
 
     try {
         let dispatchedInstruments;
         // If userName query parameter is provided, filter dispatched instruments by user name
         if (userName) {
+            console.log('Received userName:', userName);
             // Call search_user_by_name function to get user IDs based on name pattern
             const userIds = await db.searchUserIdsByName(userName);
             // If user IDs are found, filter dispatched instruments by those user IDs
             if (userIds.length > 0) {
+                console.log('userIds:', userIds);
                 dispatchedInstruments = await db.getDispatchedInstrumentsByUserIds(userIds);
             } else {
                 dispatchedInstruments = [];
             }
         } else {
             // Otherwise, fetch all dispatched instruments
+            console.log('No parameters received')
             dispatchedInstruments = await db.getDispatchedInstruments();
         }
         res.json(dispatchedInstruments);

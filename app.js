@@ -23,10 +23,10 @@ app.set('view engine', 'ejs');
 
 const authRouter = require('./routes/authRoutes');
 const instrumentsRouter = require('./routes/instruments');
-const dispatchesRouter = require('./routes/dispatches');
+const checkoutsRouter = require('./routes/checkouts');
 const availableInstrumentsRouter = require('./routes/available');
 const returnInstrumentRouter = require('./routes/returns');
-const useersRouter = require('./routes/users');
+const usersRouter = require('./routes/users');
 
 app.use(bodyParser.json());
 app.use(
@@ -41,10 +41,10 @@ app.get('/', function(req, res) {
 
 app.use('/auth', authRouter); 
 app.use('/instruments', instrumentsRouter);
-app.use('/dispatches', dispatchesRouter);
+app.use('/checkouts', checkoutsRouter);
 app.use('/available', availableInstrumentsRouter);
 app.use('/returns', returnInstrumentRouter);
-app.use('/users', useersRouter);
+app.use('/users', usersRouter);
 
 
 app.listen(PORT, () => {
