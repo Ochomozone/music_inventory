@@ -265,7 +265,7 @@ const getUserIdByRole = async (role) => {
 };
 
 const getAllUsers = async () => {
-    const queryText = `SELECT * FROM all_users_view`;
+    const queryText = `SELECT * FROM all_users_view ORDER BY full_name`;
     try {
         const users = await query(queryText);
         return users;
@@ -311,8 +311,9 @@ const getAvailableInstrumentsByDescription = async (description) => {
 
 
 const createDispatch = async (description, number, userId) => {
-    try {
-        console.log(description, number, userId);
+    if (!description || !number || !userId) {
+        throw new Error('Missing required parameters');
+    } else { try {
         // Retrieve the instrument ID based on its description and number
         const instrumentId = await getInstrumentIdByDescriptionNumber(description, number);
         // console.log(instrumentId)
@@ -324,21 +325,18 @@ const createDispatch = async (description, number, userId) => {
             RETURNING *
         `;
         const rows = await query(queryText, [instrumentId, userId]);
-        console.log(rows);
         return rows; 
     } catch (error) {
         console.error('Error creating dispatch:', error);
         throw error;
-    }
+    }}
 };
+
 
 const returnInstrument = async (instrumentId) => {
     try {
         const current_user = process.env.DB_USER
-        console.log(current_user);
-        console.log(typeof(current_user));
         const userId = await getUserIdByRole(current_user);
-        console.log(userId);
         // Insert the return into the database
         const queryText = `
             INSERT INTO returns (item_id)
@@ -346,7 +344,6 @@ const returnInstrument = async (instrumentId) => {
             RETURNING *
         `;
         const rows = await query(queryText, [instrumentId]);
-        console.log(rows);
         return rows; 
     } catch (error) {
         console.error('Error creating dispatch:', error);
