@@ -108,6 +108,36 @@ const getDispatchedInstruments = async () => {
     }
 };
 
+const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) => {
+    const queryText = `SELECT * FROM instruments 
+                        WHERE user_id IS NOT NULL
+                        AND description ILIKE '%'||$1||'%'
+                        AND number = $2
+                        ORDER BY user_name, description, number`;
+    try {
+        console.log('Database checking for:', description, number)
+        const instruments = await query(queryText, [description, number]);
+        return instruments;
+    } catch (error) {
+        console.error('Error fetching instruments:', error);
+        throw error;
+    }
+};
+
+const getDispatchedInstrumentsBYDescription = async (description) => {
+    const queryText = `SELECT * FROM instruments 
+                        WHERE user_id IS NOT NULL
+                        AND description ILIKE '%'||$1||'%'
+                        ORDER BY user_name, description, number`;
+    try {
+        const instruments = await query(queryText, [description]);
+        return instruments;
+    } catch (error) {
+        console.error('Error fetching instruments:', error);
+        throw error;
+    }
+};
+
 const getDispatchedInstrumentsByUserIds = async (userIds) => {
     const queryText = `
         SELECT * 
@@ -296,9 +326,10 @@ const getAvailableInstrumentsByDescription = async (description) => {
     const queryText = 
     `SELECT  id, description, number, make, model, serial, state, location
         FROM instruments
-        WHERE user_name IS NULL
+        WHERE user_id IS NULL
         AND description ILIKE '%' || $1|| '%'
         AND state IN ('New', 'Good', 'Fair')
+        ORDER BY description, number
         `;
     try {
         const instrument = await query(queryText, [description]);
@@ -309,6 +340,24 @@ const getAvailableInstrumentsByDescription = async (description) => {
     }
 };
 
+const getAvailableInstrumentsByDescriptionNumber = async (description, number) => {
+    const queryText = 
+    `SELECT  id, description, number, make, model, serial, state, location
+        FROM instruments
+        WHERE user_id IS NULL
+        AND description ILIKE '%' || $1|| '%'
+        AND number = $2
+        AND state IN ('New', 'Good', 'Fair')
+        ORDER BY description, number
+        `;
+    try {
+        const instrument = await query(queryText, [description, number]);
+        return instrument;
+    } catch (error) {
+        console.error('Error fetching instrument by ID:', error);
+        throw error;
+    }
+};
 
 const createDispatch = async (description, number, userId) => {
     if (!description || !number || !userId) {
@@ -358,7 +407,9 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstrumentsByDescription, 
                     getInstrumentByNumber,
                     getInstrumentIdByDescriptionNumber,
-                    getDispatchedInstruments, 
+                    getDispatchedInstruments,
+                    getDispatchedInstrumentsBYDescriptionNumber, 
+                    getDispatchedInstrumentsBYDescription,
                     getInstruments, 
                     getInstrumentById,
                     getAllUsers,
@@ -372,6 +423,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     searchUserIdsByName,
                     getAllAvailableInstruments,
                     getAvailableInstrumentsByDescription,
+                    getAvailableInstrumentsByDescriptionNumber ,
                     createDispatch,
                     returnInstrument,
                     query };

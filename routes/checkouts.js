@@ -1,6 +1,3 @@
-
-// routes/dispatches.js
-
 const express = require("express");
 const router = express.Router();
 const db = require('../db/db.js');
@@ -8,10 +5,11 @@ const db = require('../db/db.js');
 // Route to get all dispatched instruments, with optional filtering by user name
 router.get('/', async (req, res) => {
     // Extract query parameters
-    const { userName } = req.query;
+    const { userName, description, number } = req.query;
 
     try {
         let dispatchedInstruments;
+
         // If userName query parameter is provided, filter dispatched instruments by user name
         if (userName) {
             // Call search_user_by_name function to get user IDs based on name pattern
@@ -22,10 +20,17 @@ router.get('/', async (req, res) => {
             } else {
                 dispatchedInstruments = [];
             }
+        } else if (description && number) {
+            // If both description and number are provided, filter dispatched instruments by both
+            dispatchedInstruments = await db.getDispatchedInstrumentsBYDescriptionNumber(description, number);
+        } else if (description) {
+            // If only description is provided, filter dispatched instruments by description
+            dispatchedInstruments = await db.getDispatchedInstrumentsBYDescription(description);
         } else {
-            // Otherwise, fetch all dispatched instruments
+            // If no filtering parameters provided, get all dispatched instruments
             dispatchedInstruments = await db.getDispatchedInstruments();
         }
+
         res.json(dispatchedInstruments);
     } catch (error) {
         console.error('Error fetching dispatched instruments:', error);
@@ -33,25 +38,4 @@ router.get('/', async (req, res) => {
     }
 });
 
-
-// POST route to create a new dispatch
-router.post('/', async (req, res) => {
-    try {
-        // Extract data from the request body
-        const { description, number, userId } = req.body;
-
-        // Call createDispatch function to add a new dispatch
-        const dispatch = await db.createDispatch(description, number, userId);
-
-        // Send a success response with the created dispatch
-        res.status(201).json({ dispatch });
-    } catch (error) {
-        // Handle any errors and send an error response
-        console.error('Error creating dispatch:', error);
-        res.status(500).json({ error: 'Failed to create dispatch' });
-    }
-});
-
-
 module.exports = router;
-
