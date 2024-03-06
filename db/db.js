@@ -399,6 +399,31 @@ const returnInstrument = async (instrumentId) => {
     }
 };
 
+const getAllEquipmentType = async () => {
+    try {
+        const queryText = `SELECT * FROM equipment
+                            ORDER BY description`;
+        const equipmentTypes = await query(queryText);
+        return equipmentTypes;
+    } catch (error) {
+        console.error('Error fetching equipment types:', error);
+        throw error;
+    }
+};
+
+const getEquipmentTypeDescription = async (description) => {
+    try {
+        const queryText = `SELECT * FROM equipment
+                            WHERE description ILIKE $1
+                            ORDER BY description`;
+        const equipmentTypes = await query(queryText, [`%${description}%`]);
+        return equipmentTypes;
+    } catch (error) {
+        console.error('Error fetching equipment types:', error);
+        throw error;
+    }
+};
+
 
 
 
@@ -412,7 +437,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstruments, 
                     getInstrumentById,
                     getAllUsers,
-                    searchUserIdByName: searchUserIdsByName, 
+                    searchUserIdsByName, 
                     searchUsersByName,
                     searchUsersByDivision,
                     searchUsersByClass,
@@ -425,4 +450,5 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getAvailableInstrumentsByDescriptionNumber ,
                     createDispatch,
                     returnInstrument,
-                    query };
+                    getAllEquipmentType,
+                    getEquipmentTypeDescription };

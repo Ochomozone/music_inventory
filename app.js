@@ -27,6 +27,7 @@ const checkoutsRouter = require('./routes/checkouts');
 const availableInstrumentsRouter = require('./routes/available');
 const returnInstrumentRouter = require('./routes/returns');
 const usersRouter = require('./routes/users');
+const equipmentRouter = require('./routes/equipment');
 
 app.use(bodyParser.json());
 app.use(
@@ -45,6 +46,7 @@ app.use('/checkouts', checkoutsRouter);
 app.use('/available', availableInstrumentsRouter);
 app.use('/returns', returnInstrumentRouter);
 app.use('/users', usersRouter);
+app.use('/equipment', equipmentRouter);
 
 
 app.listen(PORT, () => {
