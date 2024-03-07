@@ -25,7 +25,7 @@ const query = async (text, params) => {
 };
 
 const getInstruments = async () => {
-    const queryText = `SELECT id, description, code, number, make, model, serial, location, user_name  
+    const queryText = `SELECT id, INITCAP(description) AS description, code, number, INITCAP(make) AS make, model, serial, location, user_name  
                         FROM instruments 
                         ORDER BY description, number`;
     try {
@@ -38,7 +38,7 @@ const getInstruments = async () => {
 };
 
 const getInstrumentById = async (instrumentId) => {
-    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
                         FROM instruments 
                         WHERE id = $1`;
     try {
@@ -68,7 +68,7 @@ const getInstrumentIdByDescriptionNumber = async (description, number) => {
 
 
 const getInstrumentsByDescription = async (description) => {
-    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
     FROM instruments WHERE description ILIKE '%'||$1||'%'
     ORDER BY description, number`;
     try {
@@ -81,7 +81,7 @@ const getInstrumentsByDescription = async (description) => {
 };
 
 const getInstrumentByNumber = async (description, number) => {
-    const queryText = `SELECT id, description, code, legacy_code, number, make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
     FROM instruments 
     WHERE description ILIKE '%'||$1||'%'
     AND number = $2
@@ -96,7 +96,8 @@ const getInstrumentByNumber = async (description, number) => {
 };
 
 const getDispatchedInstruments = async () => {
-    const queryText = `SELECT * FROM instruments 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+                        FROM instruments 
                         WHERE user_id IS NOT NULL
                         ORDER BY user_name, description, number`;
     try {
@@ -109,7 +110,8 @@ const getDispatchedInstruments = async () => {
 };
 
 const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) => {
-    const queryText = `SELECT * FROM instruments 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name  
+                        FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
                         AND number = $2
@@ -124,7 +126,8 @@ const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) 
 };
 
 const getDispatchedInstrumentsBYDescription = async (description) => {
-    const queryText = `SELECT * FROM instruments 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+                        FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
                         ORDER BY user_name, description, number`;
@@ -139,7 +142,7 @@ const getDispatchedInstrumentsBYDescription = async (description) => {
 
 const getDispatchedInstrumentsByUserIds = async (userIds) => {
     const queryText = `
-        SELECT * 
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
         FROM instruments
         WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
         ORDER BY user_name, description, number
@@ -307,7 +310,7 @@ const getAllUsers = async () => {
 
 const getAllAvailableInstruments = async () => {
     const queryText = `
-        SELECT  id, description, number, make, model, serial, state, location
+        SELECT  id, INITCAP(description) AS description, number, INITCAP(make) AS make, model, serial, state, location
         FROM instruments
         WHERE user_name IS NULL
         AND state IN ('New', 'Good', 'Fair')
@@ -323,7 +326,7 @@ const getAllAvailableInstruments = async () => {
 
 const getAvailableInstrumentsByDescription = async (description) => {
     const queryText = 
-    `SELECT  id, description, number, make, model, serial, state, location
+    `SELECT  id, INITCAP(description) AS description, number, INITCAP(make) as make, model, serial, state, location
         FROM instruments
         WHERE user_id IS NULL
         AND description ILIKE '%' || $1|| '%'
@@ -341,7 +344,7 @@ const getAvailableInstrumentsByDescription = async (description) => {
 
 const getAvailableInstrumentsByDescriptionNumber = async (description, number) => {
     const queryText = 
-    `SELECT  id, description, number, make, model, serial, state, location
+    `SELECT  id, INITCAP(description) AS description, number, INITCAP(make) AS make, model, serial, state, location
         FROM instruments
         WHERE user_id IS NULL
         AND description ILIKE '%' || $1|| '%'
@@ -362,11 +365,7 @@ const createDispatch = async (description, number, userId) => {
     if (!description || !number || !userId) {
         throw new Error('Missing required parameters');
     } else { try {
-        // Retrieve the instrument ID based on its description and number
         const instrumentId = await getInstrumentIdByDescriptionNumber(description, number);
-        // console.log(instrumentId)
-
-        // Insert the dispatch into the database
         const queryText = `
             INSERT INTO dispatches (item_id, user_id)
             VALUES ($1, $2)
@@ -424,6 +423,57 @@ const getEquipmentTypeDescription = async (description) => {
     }
 };
 
+const getInstrumentHistory = async () => { 
+    try {
+        const queryText = `SELECT * FROM history_view
+        ORDER BY transaction_timestamp DESC`;
+        const instrumentHistory = await query(queryText);
+        return instrumentHistory;
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        throw error;
+    }
+ };
+ const getInstrumentHistoryByDescriptionNumber = async (description, number) => { 
+    try {
+        const queryText = `SELECT * FROM history_view
+                            WHERE description ILIKE '%' || $1 || '%' 
+                            AND number = $2
+                            ORDER BY transaction_timestamp DESC`;
+        const instrumentHistory = await query(queryText, [description, number]);
+        return instrumentHistory;
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        throw error;
+    }
+ };
+
+ const getInstrumentHistoryByDescription = async (description) => { 
+    try {
+        const queryText = `SELECT * FROM history_view
+                            WHERE description ILIKE '%' || $1 || '%' 
+                            ORDER BY transaction_timestamp DESC`;
+        const instrumentHistory = await query(queryText, [description]);
+        return instrumentHistory;
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        throw error;
+    }
+ };
+
+ const getInstrumentHistoryByUser = async (userName) => { 
+    try {
+        const queryText = `SELECT * FROM history_view
+                            WHERE full_name ILIKE '%' || $1 || '%' 
+                            ORDER BY transaction_timestamp DESC`;
+        const instrumentHistory = await query(queryText, [userName]);
+        return instrumentHistory;
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        throw error;
+    }
+ };
+
 
 
 
@@ -451,4 +501,8 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     createDispatch,
                     returnInstrument,
                     getAllEquipmentType,
-                    getEquipmentTypeDescription };
+                    getEquipmentTypeDescription,
+                    getInstrumentHistory,
+                    getInstrumentHistoryByDescriptionNumber,
+                    getInstrumentHistoryByDescription,
+                    getInstrumentHistoryByUser};
