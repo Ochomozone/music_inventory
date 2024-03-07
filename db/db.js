@@ -51,7 +51,8 @@ const getInstrumentById = async (instrumentId) => {
 };
 
 const getInstrumentIdByDescriptionNumber = async (description, number) => {
-    const queryText = 'SELECT get_item_id_by_description($1, $2) AS id';
+    // const queryText = 'SELECT get_item_id_by_description($1, $2) AS id';
+    const queryText = `SELECT id FROM instruments WHERE description ILIKE '%'||$1||'%' AND number = $2`
     try {
         const result = await query(queryText, [description, number]);
         if (result && result.length > 0) {
