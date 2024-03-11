@@ -1,13 +1,28 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const session = require('express-session');
 const cors = require('cors');
 const app = express();
+const {
+  OAuth2Client,
+} = require('google-auth-library');
+app.use(express.json());
+
+const oAuth2Client = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  'postmessage',
+);
+const session = require('express-session');
 
 
-app.use(cors());
+app.use(cors(
+  {origin: 'http://localhost:3000', credentials: true}
+));
 
 const PORT = process.env.PORT || 4001;
+
+
+app.set('view engine', 'ejs');
 
 app.use(session({
   resave: false,
@@ -16,7 +31,6 @@ app.use(session({
 }));
 
 
-app.set('view engine', 'ejs');
 
 const instrumentsRouter = require('./routes/instruments');
 const checkoutsRouter = require('./routes/checkouts');
@@ -25,6 +39,8 @@ const returnInstrumentRouter = require('./routes/returns');
 const usersRouter = require('./routes/users');
 const equipmentRouter = require('./routes/equipment');
 const historyRouter = require('./routes/history');
+const userProfileRouter = require('./utils/authentication/userProfile');
+const googleAuthRouter = require('./utils/authentication/GoogleAuth');
 
 app.use(bodyParser.json());
 app.use(
@@ -33,9 +49,8 @@ app.use(
   })
 );
 
-app.get('/', function(req, res) {
-  res.render('pages/auth');
-});
+app.use(googleAuthRouter); 
+app.use(userProfileRouter);
 
 app.use('/instruments', instrumentsRouter);
 app.use('/checkouts', checkoutsRouter);
