@@ -157,6 +157,22 @@ const getDispatchedInstrumentsByUserIds = async (userIds) => {
     }
 };
 
+const getDispatchedInstrumentsByUserId = async (userId) => {
+    const queryText = `
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+        FROM instruments
+        WHERE user_id = $1
+        ORDER BY user_name, description, number
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [userId]);
+        return rows;
+    } catch (error) {
+        console.error('Error fetching dispatched instruments by user IDs:', error);
+        throw error;
+    }
+};
+
 const searchUsersByName = async (userName) => {
     const queryText = `
     SELECT *
@@ -500,6 +516,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getDispatchedInstruments,
                     getDispatchedInstrumentsBYDescriptionNumber, 
                     getDispatchedInstrumentsBYDescription,
+                    getDispatchedInstrumentsByUserId,
                     getInstruments, 
                     getInstrumentById,
                     getAllUsers,

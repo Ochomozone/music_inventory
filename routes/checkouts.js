@@ -3,9 +3,9 @@ const router = express.Router();
 const db = require('../db/db.js');
 
 router.get('/', async (req, res) => {
-    const { userName, description, number } = req.query;
+    const { userName, description, number,  userId} = req.query;
     try {
-        let dispatchedInstruments;
+        let dispatchedInstruments = [];
         if (userName) {
             const userIds = await db.searchUserIdsByName(userName);
             if (userIds.length > 0) {
@@ -13,7 +13,9 @@ router.get('/', async (req, res) => {
             } else {
                 dispatchedInstruments = [];
             }
-        } else if (description && number) {
+        } else if (userId) {
+                dispatchedInstruments = await db.getDispatchedInstrumentsByUserId(userId);
+        }else if (description && number) {
             dispatchedInstruments = await db.getDispatchedInstrumentsBYDescriptionNumber(description, number);
         } else if (description) {
             dispatchedInstruments = await db.getDispatchedInstrumentsBYDescription(description);
