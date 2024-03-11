@@ -2,6 +2,7 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const router = express.Router();
+const db = require('../../db/db.js');
 
 router.get('/user/profile', async (req, res) => {
   const authorizationHeader = req.headers['authorization'];
@@ -23,8 +24,10 @@ router.get('/user/profile', async (req, res) => {
     }
 
     const userProfile = await response.json();
+    const databaseId = await db.getUserIdByEmail(userProfile.email);
     const username = userProfile.email.split('@')[0];
     userProfile.username = username;
+    userProfile.databaseId = databaseId;
     res.json(userProfile);
   } catch (error) {
     console.error('Error fetching user profile:', error);

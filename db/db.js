@@ -281,6 +281,21 @@ const getUserIdByName = async (name) => {
     }
 };
 
+const getUserIdByEmail = async (email) => {
+    queryText = `SELECT id FROM all_users_view WHERE email = $1`;
+    try {
+        const { rows } = await pool.query(queryText, [email]);
+        if (rows.length === 1) {
+            return rows[0].id;
+        } else {
+            throw new Error('User not found');
+        }
+    } catch (error) {
+        console.error('Error retrieving user ID:', error);
+        throw error;
+    }
+};
+
 
 const getUserIdByRole = async (role) => {
     try {
@@ -494,6 +509,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     searchUsersByClass,
                     searchUsersByNameAndDivision,
                     searchUsersByNameAndClass,
+                    getUserIdByEmail,
                     searchUsersByDivisionAndClass,
                     searchUserIdsByName,
                     getAllAvailableInstruments,
