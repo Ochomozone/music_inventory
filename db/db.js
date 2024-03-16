@@ -82,14 +82,45 @@ const getInstrumentsByDescription = async (description) => {
 };
 
 const getInstrumentByNumber = async (description, number) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
-    FROM instruments 
-    WHERE description ILIKE '%'||$1||'%'
-    AND number = $2
-    ORDER BY description, number`;
+    const queryText = `
+        SELECT 
+            i.id,
+            INITCAP(i.description) AS description,
+            i.code,
+            i.legacy_code,
+            i.number,
+            INITCAP(i.make) AS make,
+            i.model,
+            i.serial,
+            i.location,
+            i.user_name,
+            u.grade_level,
+            u.email
+        FROM 
+            instruments AS i
+        LEFT JOIN 
+            users AS u ON i.user_id = u.id
+        WHERE 
+            i.description ILIKE '%'||$1||'%'
+            AND i.number = $2
+        ORDER BY 
+            i.description, i.number`;
     try {
         const instrument = await query(queryText, [description, number]);
         return instrument;
+    } catch (error) {
+        console.error('Error fetching instrument by ID:', error);
+        throw error;
+    }
+};
+
+const getInstrumentDescriptionByOldCode = async (code) => {
+    const queryText = `SELECT description
+    FROM equipment
+    WHERE legacy_code =$1`;
+    try {
+        const rows = await query(queryText, [code]);
+        return rows[0].description;
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
         throw error;
@@ -297,12 +328,15 @@ const getUserIdByName = async (name) => {
     }
 };
 
-const getUserIdByEmail = async (email) => {
-    queryText = `SELECT id FROM all_users_view WHERE email = $1`;
+const getUserByEmail = async (email) => {
+    queryText = `SELECT * FROM all_users_view WHERE email = $1`;
     try {
         const { rows } = await pool.query(queryText, [email]);
         if (rows.length === 1) {
-            return rows[0].id;
+            const id = rows[0].id;
+            const division = rows[0].division;
+            const role = rows[0].role;
+            return { id, division, role };
         } else {
             throw new Error('User not found');
         }
@@ -337,6 +371,21 @@ const getAllUsers = async () => {
         console.error('Error fetching users:', error);
         throw error;
     }
+};
+
+const getUserRole = async (userId) => {
+    let role = 'COMMUNITY';
+    const queryText = `SELECT role FROM all_users_view 
+                        WHERE id = $1`;
+    try {
+        const result = await query(queryText, [userId]);
+        role = result[0].role;
+        
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        throw error;
+    }
+    return role;
 };
 
 
@@ -505,6 +554,44 @@ const getInstrumentHistory = async () => {
         throw error;
     }
  };
+ const allLostAndFound = async () => {
+    try {
+        const queryText = `SELECT * FROM lost_and_found `;
+        const rows = await query(queryText);
+        return rows;
+    } catch (error) {
+        console.error('Error fetching:', error);
+        throw error;
+    }
+ };
+ const checkLostAndFound = async (itemId) => {
+    try {
+        const queryText = `SELECT * FROM lost_and_found
+        WHERE id = (
+            SELECT MAX(id) FROM lost_and_found
+            WHERE item_id = $1
+        )
+        `;
+        const rows = await query(queryText, [itemId]);
+        return rows;
+    } catch (error) {
+        console.error('Error fetching:', error);
+        throw error;
+    }
+ };
+
+ const newLostAndFound = async (itemId, finderName, location, contact) => {
+    try {
+        const queryText = `INSERT INTO lost_and_found (item_id, finder_name, location, contact)
+                            VALUES ($1, $2, $3, $4)
+                            RETURNING *`;
+        const rows = await query(queryText, [itemId, finderName, location, contact]);
+        return rows;
+    } catch (error) {
+        console.error('Error creating lost and found:', error);
+        throw error;
+    }
+ };
 
 
 
@@ -519,6 +606,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getDispatchedInstrumentsByUserId,
                     getInstruments, 
                     getInstrumentById,
+                    getInstrumentDescriptionByOldCode,
                     getAllUsers,
                     searchUserIdsByName, 
                     searchUsersByName,
@@ -526,9 +614,10 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     searchUsersByClass,
                     searchUsersByNameAndDivision,
                     searchUsersByNameAndClass,
-                    getUserIdByEmail,
+                    getUserByEmail,
                     searchUsersByDivisionAndClass,
                     searchUserIdsByName,
+                    getUserRole,
                     getAllAvailableInstruments,
                     getAvailableInstrumentsByDescription,
                     getAvailableInstrumentsByDescriptionNumber ,
@@ -539,4 +628,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstrumentHistory,
                     getInstrumentHistoryByDescriptionNumber,
                     getInstrumentHistoryByDescription,
-                    getInstrumentHistoryByUser};
+                    getInstrumentHistoryByUser,
+                    newLostAndFound,
+                    checkLostAndFound,
+                    allLostAndFound};

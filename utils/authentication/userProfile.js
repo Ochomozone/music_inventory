@@ -24,10 +24,12 @@ router.get('/user/profile', async (req, res) => {
     }
 
     const userProfile = await response.json();
-    const databaseId = await db.getUserIdByEmail(userProfile.email);
+    const { id, division, role}  = await db.getUserByEmail(userProfile.email);
     const username = userProfile.email.split('@')[0];
     userProfile.username = username;
-    userProfile.databaseId = databaseId;
+    userProfile.databaseId = id;
+    userProfile.role = role;
+    userProfile.division = division;
     res.json(userProfile);
   } catch (error) {
     console.error('Error fetching user profile:', error);
