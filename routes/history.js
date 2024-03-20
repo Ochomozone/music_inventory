@@ -3,10 +3,13 @@ const router = express.Router();
 const db = require('../db/db.js');
 
 router.get('/', async (req, res) => {
-    const { userName, description, number } = req.query;
+    const { userName, description, number, databaseId } = req.query;
     try {
         let history;
-        if (userName) {
+        if (databaseId) {
+            history = await db.getInstrumentHistoryByUserId(parseInt(databaseId));
+        }
+        else if (userName) {
             history = await db.getInstrumentHistoryByUser(userName);
         }else if (description && number) {
             history = await db.getInstrumentHistoryByDescriptionNumber(description, number);

@@ -31,9 +31,9 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-    const {description, number, userId} = req.body;
+    const {description, profileId, username, number, userId} = req.body;
     try {
-        await db.createDispatch(description, number, userId);
+        await db.createDispatch(description, profileId, username, number, userId);
         res.status(201).json({message: `${description} number ${number} dispatched to user ${userId}`});
     } catch (error) {
         console.error('Error dispatching instrument:', error);

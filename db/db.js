@@ -25,7 +25,7 @@ const query = async (text, params) => {
 };
 
 const getInstruments = async () => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, number, INITCAP(make) AS make, model, serial, location, user_name  
+    const queryText = `SELECT id, INITCAP(description) AS description, code, number, state, INITCAP(make) AS make, model, serial, location, user_name  
                         FROM instruments 
                         ORDER BY description, number`;
     try {
@@ -33,6 +33,41 @@ const getInstruments = async () => {
         return instruments;
     } catch (error) {
         console.error('Error fetching instruments:', error);
+        throw error;
+    }
+};
+
+const getLocations = async () => {
+    const queryText = `SELECT * FROM locations ORDER BY room`;
+    try {
+        const locations = await query(queryText);
+        return locations;
+    } catch (error) {
+        console.error('Error fetching instruments:', error);
+        throw error;
+    }
+};
+
+const getInstrumentStates = async () => {
+    const queryText = `SELECT * FROM instrument_conditions`;
+    try {
+        const conditions = await query(queryText);
+        return conditions;
+    } catch (error) {
+        console.error('Error fetching instrument conditions:', error);
+        throw error;
+    }
+};
+
+const createInstrument = async (description, make, model, serial, instrumentState, selectedNumber, profileId, username, location) => {
+    const queryText = `
+    INSERT INTO new_instrument (description, make, model, serial, state, number, profile_id, username, location )
+    VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`;
+    try {
+        const instruments = await query(queryText, [description, make, model, serial, instrumentState, selectedNumber, profileId, username, location]);
+        return instruments;
+    } catch (error) {
+        console.error('Error storing instruments:', error);
         throw error;
     }
 };
@@ -69,7 +104,7 @@ const getInstrumentIdByDescriptionNumber = async (description, number) => {
 
 
 const getInstrumentsByDescription = async (description) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, state
     FROM instruments WHERE description ILIKE '%'||$1||'%'
     ORDER BY description, number`;
     try {
@@ -94,6 +129,7 @@ const getInstrumentByNumber = async (description, number) => {
             i.serial,
             i.location,
             i.user_name,
+            i.state
             u.grade_level,
             u.email
         FROM 
@@ -128,7 +164,7 @@ const getInstrumentDescriptionByOldCode = async (code) => {
 };
 
 const getDispatchedInstruments = async () => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id
                         FROM instruments 
                         WHERE user_id IS NOT NULL
                         ORDER BY user_name, description, number`;
@@ -142,7 +178,7 @@ const getDispatchedInstruments = async () => {
 };
 
 const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name  
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
                         FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
@@ -158,7 +194,7 @@ const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) 
 };
 
 const getDispatchedInstrumentsBYDescription = async (description) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
                         FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
@@ -174,7 +210,7 @@ const getDispatchedInstrumentsBYDescription = async (description) => {
 
 const getDispatchedInstrumentsByUserIds = async (userIds) => {
     const queryText = `
-        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
         FROM instruments
         WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
         ORDER BY user_name, description, number
@@ -190,7 +226,7 @@ const getDispatchedInstrumentsByUserIds = async (userIds) => {
 
 const getDispatchedInstrumentsByUserId = async (userId) => {
     const queryText = `
-        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
         FROM instruments
         WHERE user_id = $1
         ORDER BY user_name, description, number
@@ -245,6 +281,22 @@ const searchUsersByClass = async (classValue) => {
     `;
     try {
         const { rows } = await pool.query(queryText, [`%${classValue}%`]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching users by division:', error);
+        throw error;
+    }
+};
+
+const searchUsersById = async (databaseId) => {
+    const queryText = `
+    SELECT *
+    FROM all_users_view
+    WHERE all_users_view.id = $1
+    ORDER BY all_users_view.class ,all_users_view.division, all_users_view.full_name
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [databaseId]);
         return rows;
     } catch (error) {
         console.error('Error searching users by division:', error);
@@ -442,17 +494,17 @@ const getAvailableInstrumentsByDescriptionNumber = async (description, number) =
     }
 };
 
-const createDispatch = async (description, number, userId) => {
+const createDispatch = async (description,profileId,  username, number, userId) => {
     if (!description || !number || !userId) {
         throw new Error('Missing required parameters');
     } else { try {
         const instrumentId = await getInstrumentIdByDescriptionNumber(description, number);
         const queryText = `
-            INSERT INTO dispatches (item_id, user_id)
-            VALUES ($1, $2)
+            INSERT INTO dispatches (item_id, profile_id, created_by, user_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
         `;
-        const rows = await query(queryText, [instrumentId, userId]);
+        const rows = await query(queryText, [instrumentId, profileId, username, userId]);
         return rows; 
     } catch (error) {
         console.error('Error creating dispatch:', error);
@@ -461,17 +513,16 @@ const createDispatch = async (description, number, userId) => {
 };
 
 
-const returnInstrument = async (instrumentId) => {
+const returnInstrument = async (instrumentId, userName,  userId, formerUserId) => {
     try {
-        const current_user = process.env.DB_USER
-        const userId = await getUserIdByRole(current_user);
+        
         // Insert the return into the database
         const queryText = `
-            INSERT INTO returns (item_id)
-            VALUES ($1)
+            INSERT INTO returns (item_id, created_by, user_id, former_user_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
         `;
-        const rows = await query(queryText, [instrumentId]);
+        const rows = await query(queryText, [instrumentId, userName, userId, formerUserId]);
         return rows; 
     } catch (error) {
         console.error('Error creating dispatch:', error);
@@ -554,6 +605,19 @@ const getInstrumentHistory = async () => {
         throw error;
     }
  };
+
+ const getInstrumentHistoryByUserId = async (databaseId) => { 
+    try {
+        const queryText = `SELECT * FROM history_view
+                            WHERE user_id = $1 OR returned_by_id = $1
+                            ORDER BY transaction_timestamp DESC`;
+        const instrumentHistory = await query(queryText, [databaseId]);
+        return instrumentHistory;
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        throw error;
+    }
+ };
  const allLostAndFound = async () => {
     try {
         const queryText = `SELECT * FROM lost_and_found `;
@@ -600,6 +664,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstrumentsByDescription, 
                     getInstrumentByNumber,
                     getInstrumentIdByDescriptionNumber,
+                    createInstrument,
                     getDispatchedInstruments,
                     getDispatchedInstrumentsBYDescriptionNumber, 
                     getDispatchedInstrumentsBYDescription,
@@ -608,6 +673,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstrumentById,
                     getInstrumentDescriptionByOldCode,
                     getAllUsers,
+                    searchUsersById,
                     searchUserIdsByName, 
                     searchUsersByName,
                     searchUsersByDivision,
@@ -616,6 +682,7 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     searchUsersByNameAndClass,
                     getUserByEmail,
                     searchUsersByDivisionAndClass,
+                    getInstrumentStates,
                     searchUserIdsByName,
                     getUserRole,
                     getAllAvailableInstruments,
@@ -629,6 +696,8 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     getInstrumentHistoryByDescriptionNumber,
                     getInstrumentHistoryByDescription,
                     getInstrumentHistoryByUser,
+                    getInstrumentHistoryByUserId,
                     newLostAndFound,
                     checkLostAndFound,
+                    getLocations,
                     allLostAndFound};

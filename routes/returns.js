@@ -1,21 +1,19 @@
 const express = require("express");
 const router = express.Router();
 const db = require('../db/db.js');
+const { parse } = require("dotenv");
 
 
 router.post('/', async (req, res) => {
     try {
-        let { instrumentId, description, number } = req.query;
+        let { instrumentId, userName, userId, formerUserId} = req.query;
+        
+            instrumentId = parseInt(instrumentId);
+            userId  = parseInt(userId);
+            formerUserId = parseInt(formerUserId);
+       
 
-        if (!instrumentId && description && number) {
-            const assignedInstrumentId = await db.getInstrumentIdByDescriptionNumber(description, number);
-            if (!assignedInstrumentId) {
-                throw new Error('Instrument ID not found for the provided description and number');
-            }
-            instrumentId = assignedInstrumentId;
-        }
-
-        const returnedInstrument = await db.returnInstrument(instrumentId);
+        const returnedInstrument = await db.returnInstrument(instrumentId, userName, userId, formerUserId);
 
         res.status(201).json({ returnedInstrument });
     } catch (error) {
