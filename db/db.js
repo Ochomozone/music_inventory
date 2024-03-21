@@ -36,7 +36,17 @@ const getInstruments = async () => {
         throw error;
     }
 };
-
+const getExistingInstrumentDescriptions = async () => {
+    const queryText = `SELECT DISTINCT description AS description
+                        FROM instruments `;
+    try {
+        const instruments = await query(queryText);
+        return instruments;
+    } catch (error) {
+        console.error('Error fetching instruments:', error);
+        throw error;
+    }
+};
 const getLocations = async () => {
     const queryText = `SELECT * FROM locations ORDER BY room`;
     try {
@@ -368,18 +378,6 @@ const searchUserIdsByName = async (userName) => {
     }
 };
 
-
-const getUserIdByName = async (name) => {
-    const users = await searchUserIdsByName(name);
-    if (users.length == 1) {
-        return users[0];
-    } else if (users.length > 1) {
-        throw new Error('Narrow your results');
-    } else {
-        throw new Error('User not found');
-    }
-};
-
 const getUserByEmail = async (email) => {
     queryText = `SELECT * FROM all_users_view WHERE email = $1`;
     try {
@@ -388,7 +386,8 @@ const getUserByEmail = async (email) => {
             const id = rows[0].id;
             const division = rows[0].division;
             const role = rows[0].role;
-            return { id, division, role };
+            const room = rows[0].room;
+            return { id, division, role, room };
         } else {
             throw new Error('User not found');
         }
@@ -657,6 +656,25 @@ const getInstrumentHistory = async () => {
     }
  };
 
+ const createRequest = async (userId, uniqueId, requestData) => {
+    if (!userId || !Array.isArray(requestData) || requestData.length === 0) {
+        throw new Error('Invalid parameters');
+    } else {
+        try {
+            const values = requestData.map(({ description, quantity }) => `(${userId}, ${uniqueId}, '${description}', ${quantity})`).join(', ');
+            const queryText = `
+                INSERT INTO instrument_requests (user_id, unique_id, instrument, quantity)
+                VALUES ${values}
+                RETURNING *
+            `;
+            const rows = await query(queryText);
+            return rows;
+        } catch (error) {
+            console.error('Error creating request:', error);
+            throw error;
+        }
+    }
+};
 
 
 
@@ -700,4 +718,6 @@ module.exports = { getDispatchedInstrumentsByUserIds,
                     newLostAndFound,
                     checkLostAndFound,
                     getLocations,
-                    allLostAndFound};
+                    allLostAndFound,
+                    getExistingInstrumentDescriptions,
+                    createRequest};

@@ -42,6 +42,7 @@ const historyRouter = require('./routes/history');
 const userProfileRouter = require('./utils/authentication/userProfile');
 const googleAuthRouter = require('./utils/authentication/GoogleAuth');
 const lostAndFoundRouter = require('./routes/lostAndFound');
+const requestsRouter = require('./routes/requests');
 
 app.use(bodyParser.json());
 app.use(
@@ -61,6 +62,7 @@ app.use('/users', usersRouter);
 app.use('/equipment', equipmentRouter);
 app.use('/history', historyRouter);
 app.use('/lost', lostAndFoundRouter);
+app.use('/requests', requestsRouter);
 
 
 app.listen(PORT, () => {
