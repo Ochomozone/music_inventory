@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const db = require('../db/db.js');
+const db = require('../db/historyDb');
 
 router.get('/', async (req, res) => {
     const { userName, description, number, databaseId } = req.query;
@@ -25,18 +25,6 @@ router.get('/', async (req, res) => {
         console.error('Error fetching dispatched instruments:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
-});
-
-router.post('/', async (req, res) => {
-    const {description, number, userId} = req.body;
-    try {
-        await db.createDispatch(description, number, userId);
-        res.status(201).json({message: `${description} number ${number} dispatched to user ${userId}`});
-    } catch (error) {
-        console.error('Error dispatching instrument:', error);
-        res.status(500).json({error: 'Internal server error'});
-    }
-
 });
 
 module.exports = router;

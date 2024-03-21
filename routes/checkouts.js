@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const db = require('../db/db.js');
+const db = require('../db/dispatchesDb');
 
 router.get('/', async (req, res) => {
     const { userName, description, number,  userId} = req.query;

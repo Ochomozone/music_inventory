@@ -1,11 +1,10 @@
 const express = require("express");
 const router = express.Router();
-const db = require('../db/db.js');
+const db = require('../db/usersDb.js');
 
 router.get('/', async (req, res) => {
     // Extract query parameters
     const { userName, userDivision, classValue, databaseId } = req.query;
-
     try {
         let userList;
         // If userName query parameter is provided, filterusers by user name

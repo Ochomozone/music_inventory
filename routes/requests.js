@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const db = require('../db/db.js');
+const db = require('../db/requestsdb.js');
 
 router.post('/', async (req, res) => {
     const { userId, uniqueId,requestData } = req.body;

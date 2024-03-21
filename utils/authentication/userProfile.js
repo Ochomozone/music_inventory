@@ -2,7 +2,7 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const router = express.Router();
-const db = require('../../db/db.js');
+const db = require('../../db/usersDb.js');
 
 router.get('/user/profile', async (req, res) => {
   const authorizationHeader = req.headers['authorization'];

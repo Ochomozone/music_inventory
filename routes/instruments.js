@@ -2,7 +2,7 @@
 
 const express = require("express");
 const router = express.Router();
-const db = require('../db/db.js');
+const db = require('../db/instrumentDb');
 
 router.get('/states', async (req, res) => {
     try {

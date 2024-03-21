@@ -1,4 +1,4 @@
-import { query } from './index.js';
+const { query, pool } = require('./dbCore.js');
  const createRequest = async (userId, uniqueId, requestData) => {
     if (!userId || !Array.isArray(requestData) || requestData.length === 0) {
         throw new Error('Invalid parameters');
