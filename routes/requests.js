@@ -29,31 +29,39 @@ router.get('/', async (req, res) => {
             res.status(200).json({ uniqueId,requestData });
         } else if (userId) {
             const rows = await db.getUserRequests(userId);
-            const requestData = rows.reduce((acc, { uniqueId: unique_id, status, instrument, quantity, created_at }) => {
+            const requestData = rows.reduce((acc, { unique_id, status, instrument, quantity, created_at }) => {
                 if (acc[unique_id]) {
                     acc[unique_id].num_of_instruments += quantity;
                 } else {
                     acc[unique_id] = {
-                        date: created_at,
-                        requestData: {
-                            quantityRequested: quantity,
-                            status: status
-                        }
+                        num_of_instruments: quantity,
+                        status: status,
+                        created_at: created_at
                     };
                 }
                 return acc;
             }, {});
-            const formattedData = Object.keys(requestData).map(unique_id => ({
-                unique_id,
-                date: requestData[uniqueId].date,
+            const uniqueIdsWithDates = new Map();
+            rows.forEach(({ unique_id, created_at }) => {
+                if (!uniqueIdsWithDates.has(unique_id)) {
+                    uniqueIdsWithDates.set(unique_id, created_at);
+                }
+            });
+            const uniqueIdDates = Object.fromEntries(uniqueIdsWithDates);
+        
+            const formattedData = Object.keys(requestData).map(uniqueId => ({
+                uniqueId,
+                date: uniqueIdDates[uniqueId], 
                 requestData: {
-                    quantityRequested: requestData[uniqueId].requestData.quantityRequested,
-                    status: requestData[uniqueId].requestData.status
+                    num_of_instruments: requestData[uniqueId].num_of_instruments,
+                    status: requestData[uniqueId].status
                 }
             }));
         
             res.status(200).json(formattedData);
         }
+        
+        
          else {
             const rows = await db.getAllRequests();
             res.status(200).json(rows);
