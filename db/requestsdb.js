@@ -71,12 +71,32 @@ const getRequestDetails = async (uniqueId) => {
     }
 };
 
+const deleteRequest = async (uniqueId) => {
+    if (!uniqueId) {
+        throw new Error('Invalid parameters');
+    } else {
+        try {
+            const queryText = `
+                DELETE FROM instrument_requests
+                WHERE unique_id = $1
+                RETURNING *
+            `;
+            const rows = await query(queryText, [`${uniqueId}`]);
+            return rows;
+        } catch (error) {
+            console.error('Error deleting request:', error);
+            throw error;
+        }
+    }
+};
+
 
 module.exports = {
     createRequest,
     getAllRequests,
     getUserRequests,
-    getRequestDetails
+    getRequestDetails,
+    deleteRequest
 
 };
 
