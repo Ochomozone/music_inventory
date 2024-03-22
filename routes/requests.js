@@ -31,8 +31,8 @@ router.get('/', async (req, res) => {
                     if (instruments_granted) {
                         instrumentDetails = await Promise.all(instruments_granted.map(async (instrumentId) => {
                             const returnedInstrument = await getInstrumentById(parseInt(instrumentId));
-                            const { id, description, number } = returnedInstrument[0];
-                            return { id, description, number };
+                            const { id, description, number, serial } = returnedInstrument[0];
+                            return { id, description, number, serial };
                         }));
                     }
                     return {

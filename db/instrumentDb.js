@@ -64,7 +64,6 @@ const getInstrumentById = async (instrumentId) => {
     try {
         const instrument = await query(queryText, [instrumentId]);
         return instrument;
-        console.log('instrument from instrumentDb:', instrument);
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
         throw error;
