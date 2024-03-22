@@ -23,11 +23,17 @@ router.get('/', async (req, res) => {
     try {
         if (uniqueId) {
             const rows = await db.getRequestDetails(uniqueId);
-            const requestData = rows.map(
-                ({ id, success,  instrument, quantity }) => ({
-                    id, success, description: instrument, quantity }));
-            res.status(200).json({ uniqueId,requestData });
-        } else if (userId) {
+            const date = rows.length > 0 ? rows[0].created_at : null;
+        
+            const requestData = rows.map(({ id, success, instrument, quantity }) => ({
+                id, 
+                success, 
+                description: instrument, 
+                quantity
+            }));
+            res.status(200).json({ uniqueId, date, requestData });
+        }
+         else if (userId) {
             const rows = await db.getUserRequests(userId);
             const requestData = rows.reduce((acc, { unique_id, status, instrument, quantity, created_at }) => {
                 if (acc[unique_id]) {
@@ -53,7 +59,7 @@ router.get('/', async (req, res) => {
                 uniqueId,
                 date: uniqueIdDates[uniqueId], 
                 requestData: {
-                    num_of_instruments: requestData[uniqueId].num_of_instruments,
+                    quantityRequested: requestData[uniqueId].num_of_instruments,
                     status: requestData[uniqueId].status
                 }
             }));
