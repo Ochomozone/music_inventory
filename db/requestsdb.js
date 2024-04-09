@@ -90,13 +90,56 @@ const deleteRequest = async (uniqueId) => {
     }
 };
 
+const logUpdateRequest = async (status, success, notes, uniqueId, attendedBy, attendedById) => {
+    if (!attendedBy || !attendedById ) {
+        throw new Error('Invalid parameters');
+    }
+    try {
+        const queryText = `
+            UPDATE instrument_requests 
+            SET status = $1, success = $2, resolved_at = (CURRENT_DATE + LOCALTIME) , attended_by = $3, attended_by_id = $4, notes = $5
+            WHERE unique_id = $6
+            RETURNING *
+        `;
+        const values = [status, success, attendedBy, attendedById, notes, uniqueId];
+        const rows = await query(queryText, values);
+        return rows;
+    } catch (error) {
+        console.error('Error updating request:', error);
+        throw error;
+    }
+}
+const updateRequests = async (id, status, success, uniqueId, notes, attendedBy, attendedById, instrumentsGranted) => {
+    if (!attendedBy || !attendedById ) {
+        throw new Error('Invalid parameters');
+    } else {
+        try {
+            const queryText = `
+                UPDATE instrument_requests
+                SET   instruments_granted = $1
+                WHERE id = $2
+                RETURNING *
+            `;
+            const values = [instrumentsGranted, id];
+            const rows = await query(queryText, values);
+            if (rows){
+                const logUpdate = await logUpdateRequest(status, success, notes, uniqueId, attendedBy, attendedById);
+            return logUpdate;}
+        } catch (error) {
+            console.error('Error updating request:', error);
+            throw error;
+        }
+    }
+}
+
 
 module.exports = {
     createRequest,
     getAllRequests,
     getUserRequests,
     getRequestDetails,
-    deleteRequest
+    deleteRequest,
+    updateRequests
 
 };
 

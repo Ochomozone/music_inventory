@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/requestsdb.js');
 const {searchUsersById} = require('../db/usersDb.js');
 const {getInstrumentById} = require('../db/instrumentDb.js');
+const {createDispatch} = require('../db/dispatchesDb.js');
 
 router.post('/', async (req, res) => {
     const { userId, uniqueId,requestData } = req.body;
@@ -26,6 +27,9 @@ router.get('/', async (req, res) => {
                 const rows = await db.getRequestDetails(uniqueId);
                 const date = rows.length > 0 ? rows[0].created_at : null;
                 const notes = rows.length > 0 ? rows[0].notes : null;
+                const creatorId = rows.length > 0 ? rows[0].user_id : null;
+                const users = await searchUsersById(creatorId);
+                const userName = users.length > 0 ? users[0].full_name : null;
                 const requestData = await Promise.all(rows.map(async ({ id, success, instrument, quantity, instruments_granted }) => {
                     let instrumentDetails = [];
                     if (instruments_granted) {
@@ -38,6 +42,8 @@ router.get('/', async (req, res) => {
                     return {
                         id,
                         success,
+                        creatorId,
+                        creatorName: userName,
                         description: instrument,
                         quantity,
                         instruments_granted: instrumentDetails.length > 0 ? instrumentDetails : undefined
@@ -108,10 +114,59 @@ router.get('/', async (req, res) => {
         }
         
         
-         else {
-            const rows = await db.getAllRequests();
-            res.status(200).json(rows);
+        else {
+            try {
+                const rows = await db.getAllRequests();
+                const result = {};
+        
+                await Promise.all(rows.map(async row => {
+                    const { id, created_at, user_id, instrument, quantity, status, success, unique_id, resolved_at, notes, attended_by, attended_by_id,  instruments_granted } = row;
+                    let instrumentDetails = [];
+        
+                    if (instruments_granted) {
+                        instrumentDetails = await Promise.all(instruments_granted.map(async (instrumentId) => {
+                            const returnedInstrument = await getInstrumentById(parseInt(instrumentId));
+                            const { id, description, number, serial } = returnedInstrument[0];
+                            return { instrumentId: id, number, description, serial };
+                        }));
+                    }
+        
+                    // Fetch creatorName
+                    const users = await searchUsersById(user_id);
+                    const creatorName = users.length > 0 ? users[0].full_name : null;
+                   
+        
+                    if (!result[unique_id]) {
+                        result[unique_id] = {
+                            user_id,
+                            created_at,
+                            status,
+                            success,
+                            resolved_at,
+                            attended_by,
+                            attended_by_id,
+                            creatorId:user_id,
+                            notes,
+                            creatorName,
+                            instrumentData: []
+                        };
+                    }
+        
+                    result[unique_id].instrumentData.push({
+                        instrument,
+                        quantity,
+                        instruments_granted: instrumentDetails.length > 0 ? instrumentDetails : undefined
+                    });
+                }));
+        
+                res.status(200).json(result);
+            } catch (error) {
+                console.error('Error fetching requests:', error);
+                res.status(500).json({ error: 'Failed to fetch requests' });
+            }
         }
+        
+        
     } catch (error) {
         console.error('Error getting requests:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -122,7 +177,6 @@ router.get('/', async (req, res) => {
 
 router.delete('/', async (req, res) => {
     const { uniqueId } = req.query;
-    console.log('uniqueId:', uniqueId)
     if (!uniqueId) {
         return res.status(400).json({ error: 'Invalid request body' });
     }
@@ -135,6 +189,30 @@ router.delete('/', async (req, res) => {
     }
 }
 );
+router.patch('/', async (req, res) => {
+    console.log('req.body:', req.body)
+    const { id, status, success, uniqueId, notes, attendedBy, attendedById, creatorName, creatorId, instrumentsGranted } = req.body;
+    if (!attendedBy || !attendedById) {
+        return res.status(400).json({ error: 'Invalid request body' });
+    }
+    try {
+        let instrumentsGrantedList = null;
+        if (instrumentsGranted) {
+            instrumentsGrantedList = instrumentsGranted.map(item => parseInt(item, 10));
+            for (const instrument of instrumentsGrantedList) {
+                const returnedInstrument = await getInstrumentById(instrument);
+                const {description, number} = returnedInstrument[0];
+                await createDispatch(description, attendedById, creatorName, number, creatorId); 
+            }
+        }
+        await db.updateRequests(id, status, success, uniqueId, notes, attendedBy, attendedById, instrumentsGrantedList);
+        res.status(200).json({ message: 'Request updated successfully' });
+    } catch (error) {
+        console.error('Error updating request:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 
 
 

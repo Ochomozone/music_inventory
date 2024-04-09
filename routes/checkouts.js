@@ -34,7 +34,7 @@ router.post('/', async (req, res) => {
     const {description, profileId, username, number, userId} = req.body;
     try {
         await db.createDispatch(description, profileId, username, number, userId);
-        res.status(201).json({message: `${description} number ${number} dispatched to user ${userId}`});
+        res.status(201).json({message: `${description} number ${number} dispatched to user ${username}`});
     } catch (error) {
         console.error('Error dispatching instrument:', error);
         res.status(500).json({error: 'Internal server error'});
