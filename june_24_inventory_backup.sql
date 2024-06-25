@@ -3,9 +3,9 @@
 --
 
 -- Dumped from database version 15.6 (Postgres.app)
--- Dumped by pg_dump version 16.0
+-- Dumped by pg_dump version 15.6
 
--- Started on 2024-03-13 09:58:07 EAT
+-- Started on 2024-06-24 16:35:20 EAT
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -18,470 +18,12 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
---
--- TOC entry 5 (class 2615 OID 2200)
--- Name: public; Type: SCHEMA; Schema: -; Owner: pg_database_owner
---
-DROP SCHEMA IF EXISTS public;
-
-CREATE SCHEMA public;
-
-
-ALTER SCHEMA public OWNER TO pg_database_owner;
-
---
--- TOC entry 3972 (class 0 OID 0)
--- Dependencies: 5
--- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: pg_database_owner
---
-
-COMMENT ON SCHEMA public IS 'standard public schema';
-
-
---
--- TOC entry 308 (class 1255 OID 22925)
--- Name: check_teacher_role(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-
-CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
-
-CREATE FUNCTION public.check_teacher_role() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF (SELECT role FROM users WHERE id = NEW.teacher_id) <> 'TEACHER' THEN
-    RAISE EXCEPTION 'Teacher_id must correspond to a user with the role "TEACHER".';
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.check_teacher_role() OWNER TO postgres;
-
---
--- TOC entry 328 (class 1255 OID 27833)
--- Name: create_roles(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.create_roles() RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    user_record RECORD;
-    username VARCHAR(100);
-    default_password VARCHAR(100);
-    user_id INT;
-    role_to_grant VARCHAR(100);
-BEGIN
-    FOR user_record IN SELECT * FROM users WHERE role IN ('STUDENT', 'MUSIC TEACHER', 'MUSIC TA') 
-                                            AND email IS NOT NULL
-    LOOP
-        username := user_record.username;
-        default_password := CONCAT(username, '@music');
-        user_id := user_record.id;
-        role_to_grant := user_record.role;
-        
-        -- Check if role already exists
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = username) THEN
-            -- Create role
-            EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', username, default_password);
-                
-            -- Associate user ID with the role using a comment
-            EXECUTE format('COMMENT ON ROLE %I IS %L', username, 'User ID: ' || user_id);
-            
-            -- Grant privileges based on role
-            IF role_to_grant = 'STUDENT' THEN
-                EXECUTE format('GRANT student TO %I', username);
-            ELSIF role_to_grant = 'MUSIC TEACHER' THEN
-                EXECUTE format('GRANT music_teacher TO %I', username);
-            ELSIF role_to_grant = 'MUSIC TA' THEN
-                EXECUTE format('GRANT music_ta TO %I', username);
-            END IF;
-        END IF;
-    END LOOP;
-END;
-$$;
-
-
-ALTER FUNCTION public.create_roles() OWNER TO postgres;
-
---
--- TOC entry 327 (class 1255 OID 24774)
--- Name: dispatch(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.dispatch() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$DECLARE
-    instrument_user_name TEXT;
-BEGIN
-    -- Check if the family is valid
-    IF (SELECT family FROM equipment WHERE id = NEW.item_id) NOT IN ('STRING', 'WOODWIND', 'BRASS', 'PERCUSSION', 'ELECTRIC', 'KEYBOARD') THEN
-        RAISE EXCEPTION 'Item cannot be rented out';
-    END IF;
-
-    -- Check if the instrument is already checked out
-    SELECT INTO instrument_user_name first_name || ' ' || last_name
-    FROM users
-    WHERE "id" = (SELECT user_id FROM instruments WHERE "id" = NEW.item_id)::integer;
-
-
-    IF instrument_user_name IS NOT NULL THEN
-        RAISE EXCEPTION 'Instrument already checked out to %', instrument_user_name;
-    END IF;
-
-    -- Update the instruments table
-    UPDATE instruments
-    SET "user_id" = NEW.user_id,
-        location = NULL
-    WHERE id = NEW.item_id;
-	NEW.created_by = CURRENT_USER;
-
-    RETURN NEW;
-END;$$;
-
-
-ALTER FUNCTION public.dispatch() OWNER TO postgres;
-
---
--- TOC entry 316 (class 1255 OID 24759)
--- Name: get_division(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_division(grade_level character varying) RETURNS character varying
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  grade_level := UPPER(grade_level);
-  
-  IF grade_level IN ('PK', 'K', '1', '2', '3', '4', '5') THEN
-    RETURN 'ES';
-  ELSIF grade_level IN ('6', '7', '8') THEN
-    RETURN 'MS';
-  ELSIF grade_level IN ('9', '10', '11', '12') THEN
-    RETURN 'HS';
-  ELSE
-    RETURN NULL;
-  END IF;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_division(grade_level character varying) OWNER TO postgres;
-
---
--- TOC entry 323 (class 1255 OID 25099)
--- Name: get_instruments_by_name(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_instruments_by_name(p_name character varying) RETURNS TABLE(description public.citext, make public.citext, number integer, username character varying)
-    LANGUAGE plpgsql
-    AS $_$
-BEGIN
-    RETURN QUERY EXECUTE '
-    SELECT description, make, number, user_name
-    FROM all_instruments_view
-    WHERE user_name ILIKE $1'
-    USING '%' || p_name || '%';
-END;
-$_$;
-
-
-ALTER FUNCTION public.get_instruments_by_name(p_name character varying) OWNER TO postgres;
-
---
--- TOC entry 319 (class 1255 OID 25009)
--- Name: get_item_id_by_code(character varying, integer); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_item_id_by_code(p_code character varying, p_number integer, OUT item_id integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    SELECT id INTO item_id
-    FROM all_instruments_view
-    WHERE code = p_code
-    AND number = p_number;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_item_id_by_code(p_code character varying, p_number integer, OUT item_id integer) OWNER TO postgres;
-
---
--- TOC entry 317 (class 1255 OID 25007)
--- Name: get_item_id_by_description(character varying, integer); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_item_id_by_description(p_description character varying, p_number integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    v_item_id INT;
-BEGIN
-    SELECT id INTO v_item_id
-    FROM all_instruments_view
-    WHERE description = p_description
-    AND number = p_number;
-
-    RETURN v_item_id;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_item_id_by_description(p_description character varying, p_number integer) OWNER TO postgres;
-
---
--- TOC entry 318 (class 1255 OID 25008)
--- Name: get_item_id_by_old_code(character varying, integer); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_item_id_by_old_code(p_code character varying, p_number integer, OUT item_id integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    SELECT id INTO item_id
-    FROM all_instruments_view
-    WHERE legacy_code = p_code
-    AND number = p_number;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_item_id_by_old_code(p_code character varying, p_number integer, OUT item_id integer) OWNER TO postgres;
-
---
--- TOC entry 320 (class 1255 OID 25010)
--- Name: get_item_id_by_serial(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_item_id_by_serial(p_serial character varying, OUT item_id integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    SELECT id INTO item_id
-    FROM all_instruments_view
-    WHERE "serial" = p_serial;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_item_id_by_serial(p_serial character varying, OUT item_id integer) OWNER TO postgres;
-
---
--- TOC entry 321 (class 1255 OID 25033)
--- Name: get_user_id_by_number(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_user_id_by_number(p_number character varying, OUT user_id integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    SELECT id INTO user_id
-    FROM all_users_view
-    WHERE "number" = p_number;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_user_id_by_number(p_number character varying, OUT user_id integer) OWNER TO postgres;
-
---
--- TOC entry 325 (class 1255 OID 27714)
--- Name: get_user_id_by_role(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.get_user_id_by_role(p_role character varying, OUT user_id integer) RETURNS integer
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    SELECT id INTO user_id
-    FROM users
-    WHERE "username" = p_role;
-END;
-$$;
-
-
-ALTER FUNCTION public.get_user_id_by_role(p_role character varying, OUT user_id integer) OWNER TO postgres;
-
---
--- TOC entry 303 (class 1255 OID 22927)
--- Name: insert_type(character varying, character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.insert_type(p_code character varying, p_description character varying) RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  INSERT INTO types (code, description) VALUES (UPPER(p_code), UPPER(p_description));
-END;
-$$;
-
-
-ALTER FUNCTION public.insert_type(p_code character varying, p_description character varying) OWNER TO postgres;
-
---
--- TOC entry 329 (class 1255 OID 24770)
--- Name: log_transaction(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.log_transaction() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$BEGIN
-    IF TG_TABLE_NAME = 'instruments' THEN
-        -- Insert or update on the instruments table
-        IF TG_OP = 'INSERT' THEN
-            -- Instrument created
-            INSERT INTO instrument_history (transaction_type, created_by, item_id)
-            VALUES ('Instrument Created', CURRENT_USER, NEW.id);
-        ELSIF TG_OP = 'UPDATE' THEN
-            -- Check if state or number columns have been updated
-            IF NEW.state <> OLD.state OR NEW.number <> OLD.number THEN
-                -- Instrument updated
-                INSERT INTO instrument_history (transaction_type, created_by, item_id)
-                VALUES ('Details Updated', CURRENT_USER, NEW.id);
-            END IF;
-        END IF;
-    ELSIF TG_TABLE_NAME = 'dispatches' THEN
-        -- Insert on the dispatches table
-        IF TG_OP = 'INSERT' THEN
-            -- Instrument dispatched
-            INSERT INTO instrument_history (transaction_type, created_by, item_id, assigned_to)
-            VALUES ('Instrument Out',CURRENT_USER, NEW.item_id, NEW.user_id);
-        END IF;
-   
-	ELSIF TG_TABLE_NAME = 'returns' THEN
-        -- Insert on the returns table
-        IF TG_OP = 'INSERT' THEN
-            -- Instrument returned
-            INSERT INTO instrument_history (transaction_type, item_id, created_by)
-            VALUES ('Instrument Returned', NEW.item_id,CURRENT_USER);
-        END IF;
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.log_transaction() OWNER TO postgres;
-
---
--- TOC entry 326 (class 1255 OID 24846)
--- Name: new_instr_function(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.new_instr_function() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    n_code VARCHAR;
-    legacy_code VARCHAR;
-    last_number INT;
-    nstate VARCHAR;
-BEGIN
-    -- Work out correct code
-    SELECT equipment.code INTO n_code FROM equipment WHERE equipment.description = NEW.description;
-    SELECT equipment.legacy_code INTO legacy_code FROM equipment WHERE equipment.description = UPPER(NEW.description);
-   
-    -- If "number" is explicitly provided, use that value
-    IF NEW.number IS NOT NULL THEN
-        last_number := NEW.number - 1; -- Subtract 1 to avoid conflicts with auto-increment
-    ELSE
-        -- Work out the last number for the given code
-        SELECT COALESCE(MAX(number), 0) INTO last_number FROM instruments WHERE "code" = n_code;
-    END IF;
-
-    -- Populate the columns and insert into instruments
-    INSERT INTO instruments (
-        "code",
-        "legacy_code",
-        "description",
-        "serial",
-        "number",
-        "make",
-        "model",
-        "state", 
-        "location"
-    ) VALUES (
-        n_code,
-        legacy_code,
-        NEW.description,
-        COALESCE(NEW.serial, NULL),
-        COALESCE(NEW.number, last_number + 1),
-        COALESCE(NEW.make, NULL),
-        COALESCE(NEW.model, NULL),
-        COALESCE(NEW.state, 'New'),
-        COALESCE(NEW.location, 'INSTRUMENT STORE')
-    );
-
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.new_instr_function() OWNER TO postgres;
-
---
--- TOC entry 324 (class 1255 OID 27834)
--- Name: return(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.return() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE p_user_id integer;
-BEGIN
-	SELECT id INTO p_user_id FROM users WHERE username = CURRENT_USER;
-    -- Check if the current user has a room assigned
-    IF (SELECT room FROM users WHERE id = p_user_id) IS NOT NULL THEN
-        -- Instrument returned
-        UPDATE instruments
-        SET user_id = NULL,
-            location = (SELECT room FROM users WHERE users.id = p_user_id),
-            user_name = NULL
-        WHERE id = NEW.item_id;
-
-        NEW.created_by = CURRENT_USER;
-    ELSE
-        -- Do not allow instrument return if the current user has no room assigned
-        RAISE EXCEPTION 'User cannot return instrument. No room assigned.';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.return() OWNER TO postgres;
-
---
--- TOC entry 322 (class 1255 OID 25048)
--- Name: search_user_by_name(character varying); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.search_user_by_name(p_name character varying, OUT user_id integer, OUT full_name text, OUT grade_level character varying) RETURNS SETOF record
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    RETURN QUERY
-    SELECT all_users_view.id, all_users_view.full_name, all_users_view.grade_level
-    FROM all_users_view
-    WHERE all_users_view.full_name ILIKE '%' || p_name || '%';
-END;
-$$;
-
-
-ALTER FUNCTION public.search_user_by_name(p_name character varying, OUT user_id integer, OUT full_name text, OUT grade_level character varying) OWNER TO postgres;
-
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- TOC entry 240 (class 1259 OID 24634)
+-- TOC entry 235 (class 1259 OID 30913)
 -- Name: equipment; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -498,7 +40,7 @@ CREATE TABLE public.equipment (
 ALTER TABLE public.equipment OWNER TO postgres;
 
 --
--- TOC entry 239 (class 1259 OID 24633)
+-- TOC entry 236 (class 1259 OID 30918)
 -- Name: all_instruments_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -513,7 +55,7 @@ ALTER TABLE public.equipment ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTIT
 
 
 --
--- TOC entry 218 (class 1259 OID 24202)
+-- TOC entry 237 (class 1259 OID 30919)
 -- Name: instruments; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -531,14 +73,14 @@ CREATE TABLE public.instruments (
     number integer,
     user_name public.citext,
     user_id integer,
-    CONSTRAINT instruments_state_check CHECK (((state)::text = ANY ((ARRAY['New'::character varying, 'Good'::character varying, 'Worn'::character varying, 'Damaged'::character varying, 'Write-off'::character varying])::text[])))
+    issued_on date DEFAULT CURRENT_DATE
 );
 
 
 ALTER TABLE public.instruments OWNER TO postgres;
 
 --
--- TOC entry 222 (class 1259 OID 24250)
+-- TOC entry 238 (class 1259 OID 30926)
 -- Name: users; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -552,37 +94,15 @@ CREATE TABLE public.users (
     grade_level character varying,
     division character varying,
     room public.citext,
-    username character varying
+    username character varying,
+    active boolean DEFAULT true
 );
 
 
 ALTER TABLE public.users OWNER TO postgres;
 
 --
--- TOC entry 252 (class 1259 OID 24998)
--- Name: all_instruments_view; Type: VIEW; Schema: public; Owner: postgres
---
-
-CREATE VIEW public.all_instruments_view AS
- SELECT instruments.id,
-    instruments.description,
-    instruments.make,
-    instruments.model,
-    instruments.serial,
-    instruments.legacy_code,
-    instruments.code,
-    instruments.number,
-    instruments.location,
-    (COALESCE((((users.first_name)::text || ' '::text) || (users.last_name)::text), NULL::text))::character varying AS user_name
-   FROM (public.instruments
-     LEFT JOIN public.users ON ((instruments.user_id = users.id)))
-  ORDER BY instruments.description, instruments.number;
-
-
-ALTER VIEW public.all_instruments_view OWNER TO postgres;
-
---
--- TOC entry 238 (class 1259 OID 24383)
+-- TOC entry 240 (class 1259 OID 30937)
 -- Name: students; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -604,30 +124,7 @@ CREATE TABLE public.students (
 ALTER TABLE public.students OWNER TO postgres;
 
 --
--- TOC entry 256 (class 1259 OID 27844)
--- Name: all_users_view; Type: VIEW; Schema: public; Owner: postgres
---
-
-CREATE VIEW public.all_users_view AS
- SELECT users.id,
-    users.role,
-    users.division,
-    users.grade_level,
-    users.first_name,
-    users.last_name,
-    COALESCE((((users.first_name)::text || ' '::text) || (users.last_name)::text), (users.first_name)::text, (users.last_name)::text) AS full_name,
-    users.number,
-    users.email,
-    students.class
-   FROM (public.users
-     LEFT JOIN public.students ON (((students.student_number)::text = (users.number)::text)))
-  ORDER BY users.role, users.first_name;
-
-
-ALTER VIEW public.all_users_view OWNER TO postgres;
-
---
--- TOC entry 224 (class 1259 OID 24265)
+-- TOC entry 215 (class 1259 OID 30700)
 -- Name: class; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -641,7 +138,7 @@ CREATE TABLE public.class (
 ALTER TABLE public.class OWNER TO postgres;
 
 --
--- TOC entry 223 (class 1259 OID 24264)
+-- TOC entry 216 (class 1259 OID 30705)
 -- Name: class_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -656,25 +153,7 @@ ALTER TABLE public.class ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
 
 
 --
--- TOC entry 255 (class 1259 OID 27836)
--- Name: dispatched_instruments_view; Type: VIEW; Schema: public; Owner: postgres
---
-
-CREATE VIEW public.dispatched_instruments_view AS
- SELECT all_instruments_view.id,
-    all_instruments_view.description,
-    all_instruments_view.number,
-    all_instruments_view.make,
-    all_instruments_view.serial,
-    all_instruments_view.user_name
-   FROM public.all_instruments_view
-  WHERE (all_instruments_view.user_name IS NOT NULL);
-
-
-ALTER VIEW public.dispatched_instruments_view OWNER TO postgres;
-
---
--- TOC entry 226 (class 1259 OID 24280)
+-- TOC entry 217 (class 1259 OID 30706)
 -- Name: dispatches; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -683,14 +162,15 @@ CREATE TABLE public.dispatches (
     created_at date DEFAULT CURRENT_DATE,
     user_id integer,
     item_id integer,
-    created_by character varying
+    created_by character varying,
+    profile_id integer
 );
 
 
 ALTER TABLE public.dispatches OWNER TO postgres;
 
 --
--- TOC entry 225 (class 1259 OID 24279)
+-- TOC entry 218 (class 1259 OID 30712)
 -- Name: dispatches_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -705,7 +185,7 @@ ALTER TABLE public.dispatches ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTI
 
 
 --
--- TOC entry 244 (class 1259 OID 24657)
+-- TOC entry 219 (class 1259 OID 30713)
 -- Name: duplicate_instruments; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -729,7 +209,7 @@ CREATE TABLE public.duplicate_instruments (
 ALTER TABLE public.duplicate_instruments OWNER TO postgres;
 
 --
--- TOC entry 243 (class 1259 OID 24656)
+-- TOC entry 220 (class 1259 OID 30720)
 -- Name: duplicate_instruments_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -744,7 +224,7 @@ ALTER TABLE public.duplicate_instruments ALTER COLUMN id ADD GENERATED BY DEFAUL
 
 
 --
--- TOC entry 246 (class 1259 OID 24681)
+-- TOC entry 243 (class 1259 OID 30952)
 -- Name: hardware_and_equipment; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -761,7 +241,7 @@ CREATE TABLE public.hardware_and_equipment (
 ALTER TABLE public.hardware_and_equipment OWNER TO postgres;
 
 --
--- TOC entry 245 (class 1259 OID 24680)
+-- TOC entry 244 (class 1259 OID 30957)
 -- Name: hardware_and_equipment_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -776,107 +256,56 @@ ALTER TABLE public.hardware_and_equipment ALTER COLUMN id ADD GENERATED BY DEFAU
 
 
 --
--- TOC entry 236 (class 1259 OID 24362)
+-- TOC entry 221 (class 1259 OID 30721)
 -- Name: instrument_history; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.instrument_history (
     id integer NOT NULL,
     transaction_type character varying NOT NULL,
-    transaction_timestamp date DEFAULT CURRENT_DATE,
+    transaction_timestamp timestamp with time zone DEFAULT now(),
     item_id integer NOT NULL,
     notes text,
     assigned_to character varying,
-    created_by character varying
+    created_by character varying,
+    location character varying,
+    contact text,
+    returned_by_id integer
 );
 
 
 ALTER TABLE public.instrument_history OWNER TO postgres;
 
 --
--- TOC entry 257 (class 1259 OID 27864)
--- Name: history_view; Type: VIEW; Schema: public; Owner: postgres
+-- TOC entry 222 (class 1259 OID 30727)
+-- Name: instrument_conditions; Type: TABLE; Schema: public; Owner: postgres
 --
 
-CREATE VIEW public.history_view AS
- SELECT instrument_history.id,
-    instrument_history.transaction_type,
-    instrument_history.transaction_timestamp,
-    instrument_history.item_id AS instrument_id,
-    initcap((instruments.description)::text) AS description,
-    instruments.number,
-    instrument_history.assigned_to AS user_id,
-    initcap(COALESCE((((users.first_name)::text || ' '::text) || (users.last_name)::text), (users.first_name)::text, (users.last_name)::text)) AS full_name,
-    users.email,
-    initcap((instrument_history.created_by)::text) AS created_by
-   FROM ((public.instrument_history
-     LEFT JOIN public.users ON ((users.id = (instrument_history.assigned_to)::integer)))
-     LEFT JOIN public.instruments ON ((instruments.id = instrument_history.item_id)))
-  ORDER BY instrument_history.id;
+CREATE TABLE public.instrument_conditions (
+    id integer NOT NULL,
+    condition character varying
+);
 
 
-ALTER VIEW public.history_view OWNER TO postgres;
+ALTER TABLE public.instrument_conditions OWNER TO postgres;
 
 --
--- TOC entry 251 (class 1259 OID 24951)
--- Name: instrument_distribution_view; Type: VIEW; Schema: public; Owner: postgres
+-- TOC entry 223 (class 1259 OID 30732)
+-- Name: instrument_conditions_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
-CREATE VIEW public.instrument_distribution_view AS
- SELECT subquery.description,
-    subquery.legacy_code,
-    subquery.code,
-    subquery.total,
-    subquery.available,
-    subquery.dispatched,
-    subquery.ms_music,
-    subquery.hs_music,
-    subquery.upper_es_music,
-    subquery.lower_es_music,
-    ((((((subquery.total - COALESCE(subquery.available, (0)::bigint)) - COALESCE(subquery.ms_music, (0)::bigint)) - COALESCE(subquery.hs_music, (0)::bigint)) - COALESCE(subquery.upper_es_music, (0)::bigint)) - COALESCE(subquery.lower_es_music, (0)::bigint)) - COALESCE(subquery.dispatched, (0)::bigint)) AS unknown_count
-   FROM ( SELECT instruments.description,
-            instruments.legacy_code,
-            instruments.code,
-            count(instruments.description) AS total,
-            count(
-                CASE
-                    WHEN (instruments.location OPERATOR(public.=) 'INSTRUMENT STORE'::public.citext) THEN 1
-                    ELSE NULL::integer
-                END) AS available,
-            count(
-                CASE
-                    WHEN ((instruments.user_id IS NOT NULL) OR (instruments.user_name IS NOT NULL)) THEN 1
-                    ELSE NULL::integer
-                END) AS dispatched,
-            count(
-                CASE
-                    WHEN (instruments.location OPERATOR(public.=) 'MS MUSIC'::public.citext) THEN 1
-                    ELSE NULL::integer
-                END) AS ms_music,
-            count(
-                CASE
-                    WHEN (instruments.location OPERATOR(public.=) 'HS MUSIC'::public.citext) THEN 1
-                    ELSE NULL::integer
-                END) AS hs_music,
-            count(
-                CASE
-                    WHEN (instruments.location OPERATOR(public.=) 'UPPER ES MUSIC'::public.citext) THEN 1
-                    ELSE NULL::integer
-                END) AS upper_es_music,
-            count(
-                CASE
-                    WHEN (instruments.location OPERATOR(public.=) 'LOWER ES MUSIC'::public.citext) THEN 1
-                    ELSE NULL::integer
-                END) AS lower_es_music
-           FROM public.instruments
-          GROUP BY instruments.description, instruments.legacy_code, instruments.code) subquery
-  ORDER BY subquery.total DESC;
+ALTER TABLE public.instrument_conditions ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.instrument_conditions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
 
-
-ALTER VIEW public.instrument_distribution_view OWNER TO postgres;
 
 --
--- TOC entry 235 (class 1259 OID 24361)
+-- TOC entry 224 (class 1259 OID 30733)
 -- Name: instrument_history_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -891,7 +320,46 @@ ALTER TABLE public.instrument_history ALTER COLUMN id ADD GENERATED BY DEFAULT A
 
 
 --
--- TOC entry 217 (class 1259 OID 24201)
+-- TOC entry 247 (class 1259 OID 30968)
+-- Name: instrument_requests; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.instrument_requests (
+    id integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now(),
+    user_id integer,
+    instrument public.citext NOT NULL,
+    quantity integer DEFAULT 1 NOT NULL,
+    status character varying DEFAULT 'Pending'::character varying,
+    success character varying,
+    unique_id character varying(15),
+    notes text,
+    attended_by character varying,
+    attended_by_id integer,
+    instruments_granted integer[],
+    resolved_at timestamp with time zone
+);
+
+
+ALTER TABLE public.instrument_requests OWNER TO postgres;
+
+--
+-- TOC entry 248 (class 1259 OID 30976)
+-- Name: instrument_requests_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.instrument_requests ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.instrument_requests_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- TOC entry 249 (class 1259 OID 30977)
 -- Name: instruments_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -906,7 +374,7 @@ ALTER TABLE public.instruments ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENT
 
 
 --
--- TOC entry 216 (class 1259 OID 23612)
+-- TOC entry 250 (class 1259 OID 30978)
 -- Name: legacy_database; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -932,7 +400,7 @@ CREATE TABLE public.legacy_database (
 ALTER TABLE public.legacy_database OWNER TO postgres;
 
 --
--- TOC entry 215 (class 1259 OID 23611)
+-- TOC entry 251 (class 1259 OID 30985)
 -- Name: legacy_database_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -947,7 +415,7 @@ ALTER TABLE public.legacy_database ALTER COLUMN id ADD GENERATED BY DEFAULT AS I
 
 
 --
--- TOC entry 247 (class 1259 OID 24727)
+-- TOC entry 252 (class 1259 OID 30986)
 -- Name: locations; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -960,7 +428,7 @@ CREATE TABLE public.locations (
 ALTER TABLE public.locations OWNER TO postgres;
 
 --
--- TOC entry 248 (class 1259 OID 24743)
+-- TOC entry 253 (class 1259 OID 30991)
 -- Name: locations_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -975,7 +443,39 @@ ALTER TABLE public.locations ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTIT
 
 
 --
--- TOC entry 242 (class 1259 OID 24646)
+-- TOC entry 225 (class 1259 OID 30734)
+-- Name: lost_and_found; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.lost_and_found (
+    id integer NOT NULL,
+    item_id integer NOT NULL,
+    finder_name character varying,
+    date date DEFAULT CURRENT_DATE,
+    location text,
+    contact text
+);
+
+
+ALTER TABLE public.lost_and_found OWNER TO postgres;
+
+--
+-- TOC entry 226 (class 1259 OID 30740)
+-- Name: lost_and_found_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.lost_and_found ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.lost_and_found_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- TOC entry 254 (class 1259 OID 30992)
 -- Name: music_instruments; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -993,7 +493,7 @@ CREATE TABLE public.music_instruments (
 ALTER TABLE public.music_instruments OWNER TO postgres;
 
 --
--- TOC entry 241 (class 1259 OID 24645)
+-- TOC entry 255 (class 1259 OID 30998)
 -- Name: music_instruments_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1008,67 +508,34 @@ ALTER TABLE public.music_instruments ALTER COLUMN id ADD GENERATED BY DEFAULT AS
 
 
 --
--- TOC entry 250 (class 1259 OID 24850)
+-- TOC entry 256 (class 1259 OID 30999)
 -- Name: new_instrument; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.new_instrument (
     id integer NOT NULL,
-    legacy_number integer,
-    code public.citext,
     description public.citext,
     serial public.citext,
     state character varying,
-    location public.citext DEFAULT 'INSTRUMENT STORE'::character varying,
     make public.citext,
     model public.citext,
-    legacy_code public.citext,
     number integer,
-    user_name public.citext,
-    user_id integer,
-    CONSTRAINT instruments_state_check CHECK (((state)::text = ANY ((ARRAY['New'::character varying, 'Good'::character varying, 'Worn'::character varying, 'Damaged'::character varying, 'Write-off'::character varying])::text[])))
+    profile_id integer,
+    username public.citext,
+    location public.citext,
+    CONSTRAINT instruments_state_check CHECK (((state)::text = ANY (ARRAY[('New'::character varying)::text, ('Good'::character varying)::text, ('Worn'::character varying)::text, ('Damaged'::character varying)::text, ('Write-off'::character varying)::text])))
 );
 
 
 ALTER TABLE public.new_instrument OWNER TO postgres;
 
 --
--- TOC entry 249 (class 1259 OID 24849)
+-- TOC entry 257 (class 1259 OID 31005)
 -- Name: new_instrument_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.new_instrument ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
     SEQUENCE NAME public.new_instrument_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    MAXVALUE 2147483647
-    CACHE 1
-);
-
-
---
--- TOC entry 254 (class 1259 OID 25128)
--- Name: receive_instrument; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.receive_instrument (
-    id integer NOT NULL,
-    created_by_id integer,
-    instrument_id integer,
-    room public.citext
-);
-
-
-ALTER TABLE public.receive_instrument OWNER TO postgres;
-
---
--- TOC entry 253 (class 1259 OID 25127)
--- Name: receive_instrument_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-ALTER TABLE public.receive_instrument ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.receive_instrument_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -1078,7 +545,7 @@ ALTER TABLE public.receive_instrument ALTER COLUMN id ADD GENERATED BY DEFAULT A
 
 
 --
--- TOC entry 230 (class 1259 OID 24313)
+-- TOC entry 227 (class 1259 OID 30741)
 -- Name: repair_request; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1093,7 +560,7 @@ CREATE TABLE public.repair_request (
 ALTER TABLE public.repair_request OWNER TO postgres;
 
 --
--- TOC entry 229 (class 1259 OID 24312)
+-- TOC entry 228 (class 1259 OID 30747)
 -- Name: repairs_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1108,38 +575,7 @@ ALTER TABLE public.repair_request ALTER COLUMN id ADD GENERATED BY DEFAULT AS ID
 
 
 --
--- TOC entry 234 (class 1259 OID 24341)
--- Name: requests; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.requests (
-    id integer NOT NULL,
-    created_at date DEFAULT CURRENT_DATE,
-    teacher_id integer,
-    instrument public.citext NOT NULL,
-    quantity integer NOT NULL
-);
-
-
-ALTER TABLE public.requests OWNER TO postgres;
-
---
--- TOC entry 233 (class 1259 OID 24340)
--- Name: requests_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-ALTER TABLE public.requests ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.requests_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
-);
-
-
---
--- TOC entry 232 (class 1259 OID 24327)
+-- TOC entry 229 (class 1259 OID 30748)
 -- Name: resolve; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1154,7 +590,7 @@ CREATE TABLE public.resolve (
 ALTER TABLE public.resolve OWNER TO postgres;
 
 --
--- TOC entry 231 (class 1259 OID 24326)
+-- TOC entry 230 (class 1259 OID 30754)
 -- Name: resolve_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1169,7 +605,7 @@ ALTER TABLE public.resolve ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY 
 
 
 --
--- TOC entry 228 (class 1259 OID 24301)
+-- TOC entry 231 (class 1259 OID 30755)
 -- Name: returns; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1177,14 +613,16 @@ CREATE TABLE public.returns (
     id integer NOT NULL,
     created_at date DEFAULT CURRENT_DATE,
     item_id integer,
-    created_by character varying
+    created_by character varying,
+    user_id integer,
+    former_user_id integer
 );
 
 
 ALTER TABLE public.returns OWNER TO postgres;
 
 --
--- TOC entry 227 (class 1259 OID 24300)
+-- TOC entry 232 (class 1259 OID 30761)
 -- Name: returns_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1199,7 +637,7 @@ ALTER TABLE public.returns ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY 
 
 
 --
--- TOC entry 220 (class 1259 OID 24238)
+-- TOC entry 233 (class 1259 OID 30762)
 -- Name: roles; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1212,7 +650,7 @@ CREATE TABLE public.roles (
 ALTER TABLE public.roles OWNER TO postgres;
 
 --
--- TOC entry 219 (class 1259 OID 24237)
+-- TOC entry 234 (class 1259 OID 30768)
 -- Name: roles_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1227,7 +665,7 @@ ALTER TABLE public.roles ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
 
 
 --
--- TOC entry 237 (class 1259 OID 24382)
+-- TOC entry 258 (class 1259 OID 31006)
 -- Name: students_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1242,7 +680,7 @@ ALTER TABLE public.students ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY
 
 
 --
--- TOC entry 221 (class 1259 OID 24249)
+-- TOC entry 259 (class 1259 OID 31007)
 -- Name: users_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -1257,8 +695,8 @@ ALTER TABLE public.users ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
 
 
 --
--- TOC entry 3938 (class 0 OID 24265)
--- Dependencies: 224
+-- TOC entry 3924 (class 0 OID 30700)
+-- Dependencies: 215
 -- Data for Name: class; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -1267,71 +705,18 @@ COPY public.class (id, teacher_id, class_name) FROM stdin;
 
 
 --
--- TOC entry 3940 (class 0 OID 24280)
--- Dependencies: 226
+-- TOC entry 3926 (class 0 OID 30706)
+-- Dependencies: 217
 -- Data for Name: dispatches; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.dispatches (id, created_at, user_id, item_id, created_by) FROM stdin;
-19	2024-01-31	1072	2129	postgres
-23	2024-01-31	1072	2129	postgres
-24	2024-02-01	1072	4166	postgres
-25	2024-02-01	1072	4166	postgres
-26	2024-02-01	1072	4166	\N
-32	2024-02-01	1072	4166	\N
-35	2024-02-01	1072	4166	postgres
-45	2024-02-23	1074	2129	nochomo
-47	2024-02-23	1074	4166	nochomo
-48	2024-02-23	1074	4166	nochomo
-50	2024-02-23	1074	4166	nochomo
-52	2024-02-23	1074	4166	nochomo
-53	2024-02-23	1074	4166	nochomo
-54	2024-02-23	1074	4166	nochomo
-55	2024-02-23	1074	4166	nochomo
-56	2024-02-23	1074	4166	nochomo
-58	2024-02-23	1074	4166	nochomo
-59	2024-02-23	1074	4166	nochomo
-60	2024-02-23	1074	4166	nochomo
-64	2024-02-23	1074	4166	nochomo
-65	2024-03-01	1074	4166	nochomo
-66	2024-03-01	1074	4166	nochomo
-67	2024-03-01	1074	4166	nochomo
-68	2024-03-01	1074	4166	nochomo
-69	2024-03-02	1074	4166	nochomo
-82	2024-03-03	1074	4166	nochomo
-83	2024-03-03	1074	4166	nochomo
-87	2024-03-03	1072	4166	nochomo
-88	2024-03-03	1074	4165	nochomo
-90	2024-03-03	1074	4164	nochomo
-91	2024-03-03	1074	2129	nochomo
-93	2024-03-03	1072	4166	nochomo
-95	2024-03-03	1072	4165	nochomo
-96	2024-03-04	1072	4164	nochomo
-97	2024-03-04	1074	4164	nochomo
-98	2024-03-04	1074	4163	nochomo
-99	2024-03-04	1074	4164	nochomo
-100	2024-03-04	1074	4163	nochomo
-101	2024-03-04	1072	4166	nochomo
-102	2024-03-04	1072	2129	nochomo
-103	2024-03-04	1074	4163	nochomo
-104	2024-03-04	1074	4165	nochomo
-105	2024-03-04	1074	4166	nochomo
-106	2024-03-05	1072	4166	nochomo
-107	2024-03-05	1074	4165	nochomo
-108	2024-03-06	1074	2129	nochomo
-111	2024-03-06	1074	4166	nochomo
-112	2024-03-06	1074	4166	nochomo
-120	2024-03-07	1074	4166	postgres
-124	2024-03-07	1074	4165	nochomo
-125	2024-03-07	1074	4166	nochomo
-126	2024-03-07	1074	4164	nochomo
-127	2024-03-07	1072	4166	nochomo
+COPY public.dispatches (id, created_at, user_id, item_id, created_by, profile_id) FROM stdin;
 \.
 
 
 --
--- TOC entry 3958 (class 0 OID 24657)
--- Dependencies: 244
+-- TOC entry 3928 (class 0 OID 30713)
+-- Dependencies: 219
 -- Data for Name: duplicate_instruments; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -1436,8 +821,8 @@ COPY public.duplicate_instruments (id, number, legacy_number, family, equipment,
 
 
 --
--- TOC entry 3954 (class 0 OID 24634)
--- Dependencies: 240
+-- TOC entry 3944 (class 0 OID 30913)
+-- Dependencies: 235
 -- Data for Name: equipment; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -1739,7 +1124,6 @@ COPY public.equipment (id, family, description, legacy_code, code, notes) FROM s
 312	WOODWIND	ROTHPHONE , SOPRANO	\N	RPS	\N
 313	WOODWIND	ROTHPHONE , TENOR	\N	RPT	\N
 314	WOODWIND	SARRUSOPHONE	\N	SRP	\N
-315	WOODWIND	SAXOPHONE	\N	SX	\N
 318	WOODWIND	SAXOPHONE, BASS	\N	SXY	\N
 319	WOODWIND	SAXOPHONE, C MELODY (TENOR IN C)	\N	SXM	\N
 320	WOODWIND	SAXOPHONE, C SOPRANO	\N	SXC	\N
@@ -1772,12 +1156,14 @@ COPY public.equipment (id, family, description, legacy_code, code, notes) FROM s
 346	WOODWIND	SAXOPHONE, BARITONE	BX	SXB	\N
 347	WOODWIND	SAXOPHONE, TENOR	TX	SXT	\N
 348	STRING	DUMMY 1	\N	DMMO	\N
+349	ELECTRIC	AMPLIFIER, COMBO	\N	AMC	\N
+350	BRASS	TROMBONE, BASS PLASTIC	\N	TNBP	\N
 \.
 
 
 --
--- TOC entry 3960 (class 0 OID 24681)
--- Dependencies: 246
+-- TOC entry 3949 (class 0 OID 30952)
+-- Dependencies: 243
 -- Data for Name: hardware_and_equipment; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -1797,821 +1183,701 @@ COPY public.hardware_and_equipment (id, family, description, legacy_code, code, 
 
 
 --
--- TOC entry 3950 (class 0 OID 24362)
--- Dependencies: 236
+-- TOC entry 3931 (class 0 OID 30727)
+-- Dependencies: 222
+-- Data for Name: instrument_conditions; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.instrument_conditions (id, condition) FROM stdin;
+1	New
+2	Good
+3	Worn
+4	Damaged
+5	Write off
+6	Lost
+\.
+
+
+--
+-- TOC entry 3930 (class 0 OID 30721)
+-- Dependencies: 221
 -- Data for Name: instrument_history; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.instrument_history (id, transaction_type, transaction_timestamp, item_id, notes, assigned_to, created_by) FROM stdin;
-11	Instrument Created	2024-02-01	4163	\N	\N	postgres
-12	Instrument Created	2024-02-01	4164	\N	\N	postgres
-13	Instrument Created	2024-02-01	4165	\N	\N	postgres
-14	Instrument Created	2024-02-01	4166	\N	\N	postgres
-2987	Details Updated	2024-02-23	2129	\N	\N	nochomo
-16	Instrument Out	2024-02-01	4166	\N	1072	postgres
-2988	Instrument Out	2024-02-23	2129	\N	1074	nochomo
-18	Instrument Out	2024-02-01	4166	\N	1072	postgres
-3055	Instrument Returned	2024-03-01	4166	\N	\N	nochomo
-20	Instrument Out	2024-02-01	4166	\N	1072	postgres
-3103	Instrument Out	2024-03-04	4163	\N	1074	nochomo
-3142	Instrument Returned	2024-03-07	4166	\N	\N	nochomo
-23	Instrument Out	2024-02-01	4166	\N	1072	postgres
-26	Instrument Out	2024-02-01	4166	\N	1072	postgres
-27	Instrument Returned	2024-02-01	2129	\N	\N	postgres
-30	Instrument Returned	2024-02-01	2129	\N	\N	postgres
-2989	Details Updated	2024-02-23	4166	\N	\N	nochomo
-2990	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3056	Instrument Out	2024-03-01	4166	\N	1074	nochomo
-3104	Instrument Returned	2024-03-04	4166	\N	\N	nochomo
-3105	Instrument Returned	2024-03-04	4165	\N	\N	nochomo
-3106	Instrument Returned	2024-03-04	4164	\N	\N	nochomo
-3143	Instrument Returned	2024-03-07	4165	\N	\N	nochomo
-2991	Details Updated	2024-02-23	4166	\N	\N	postgres
-2992	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-2993	Details Updated	2024-02-23	2129	\N	\N	postgres
-2994	Instrument Returned	2024-02-23	2129	\N	\N	postgres
-2997	Details Updated	2024-02-23	2129	\N	\N	postgres
-2998	Instrument Returned	2024-02-23	2129	\N	\N	postgres
-2999	Details Updated	2024-02-23	4166	\N	\N	postgres
-3000	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3003	Details Updated	2024-02-23	4166	\N	\N	postgres
-3004	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3007	Details Updated	2024-02-23	4166	\N	\N	postgres
-3008	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3011	Details Updated	2024-02-23	4166	\N	\N	postgres
-3012	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3015	Details Updated	2024-02-23	4166	\N	\N	postgres
-3016	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3019	Details Updated	2024-02-23	4166	\N	\N	postgres
-3020	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3023	Details Updated	2024-02-23	4166	\N	\N	postgres
-3024	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3028	Details Updated	2024-02-23	4166	\N	\N	postgres
-3029	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3032	Details Updated	2024-02-23	4166	\N	\N	postgres
-3033	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3036	Details Updated	2024-02-23	4166	\N	\N	postgres
-3037	Instrument Returned	2024-02-23	4166	\N	\N	postgres
-3057	Instrument Returned	2024-03-01	4166	\N	\N	nochomo
-3107	Instrument Out	2024-03-04	4166	\N	1072	nochomo
-3144	Instrument Out	2024-03-07	4166	\N	1072	nochomo
-2995	Details Updated	2024-02-23	4166	\N	\N	nochomo
-2996	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3058	Instrument Out	2024-03-01	4166	\N	1074	nochomo
-3108	Instrument Out	2024-03-04	2129	\N	1072	nochomo
-3001	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3002	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3059	Instrument Returned	2024-03-01	4166	\N	\N	nochomo
-3109	Instrument Returned	2024-03-04	4166	\N	\N	nochomo
-3110	Instrument Returned	2024-03-04	4163	\N	\N	nochomo
-3005	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3006	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3060	Instrument Out	2024-03-01	4166	\N	1074	nochomo
-3061	Instrument Returned	2024-03-01	4166	\N	\N	nochomo
-3062	Instrument Returned	2024-03-01	4166	\N	\N	nochomo
-3111	Instrument Out	2024-03-04	4163	\N	1074	nochomo
-3009	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3010	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3063	Instrument Out	2024-03-02	4166	\N	1074	nochomo
-3112	Instrument Out	2024-03-04	4165	\N	1074	nochomo
-3013	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3014	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3064	Instrument Returned	2024-03-02	4166	\N	\N	nochomo
-3113	Instrument Returned	2024-03-04	4165	\N	\N	nochomo
-3017	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3018	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3076	Instrument Out	2024-03-03	4166	\N	1074	nochomo
-3114	Instrument Out	2024-03-04	4166	\N	1074	nochomo
-3021	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3022	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3077	Instrument Returned	2024-03-03	4166	\N	\N	nochomo
-3115	Instrument Returned	2024-03-04	4166	\N	\N	nochomo
-3026	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3027	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3078	Instrument Out	2024-03-03	4166	\N	1074	nochomo
-3116	Instrument Returned	2024-03-04	4163	\N	\N	nochomo
-3030	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3031	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3082	Instrument Returned	2024-03-03	4166	\N	\N	nochomo
-3117	Instrument Returned	2024-03-04	2129	\N	\N	nochomo
-3034	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3035	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3083	Instrument Out	2024-03-03	4166	\N	1072	nochomo
-3118	Instrument Out	2024-03-05	4166	\N	1072	nochomo
-3038	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3039	Instrument Out	2024-02-23	4166	\N	1074	nochomo
-3084	Instrument Out	2024-03-03	4165	\N	1074	nochomo
-3119	Instrument Out	2024-03-05	4165	\N	1074	nochomo
-3040	Details Updated	2024-02-23	4166	\N	\N	nochomo
-3041	Instrument Returned	2024-02-23	4166	\N	\N	nochomo
-3085	Instrument Out	2024-03-03	4164	\N	1074	nochomo
-3120	Instrument Out	2024-03-06	2129	\N	1074	nochomo
-3042	Instrument Returned	2024-02-23	4166	\N	\N	nochomo
-3043	Instrument Returned	2024-02-23	4166	\N	\N	nochomo
-3044	Instrument Returned	2024-02-23	4166	\N	\N	nochomo
-3086	Instrument Out	2024-03-03	2129	\N	1074	nochomo
-3121	Instrument Returned	2024-03-06	4166	\N	\N	nochomo
-3045	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3087	Instrument Returned	2024-03-03	2129	\N	\N	nochomo
-3088	Instrument Returned	2024-03-03	4164	\N	\N	nochomo
-3089	Instrument Returned	2024-03-03	4165	\N	\N	nochomo
-3090	Instrument Returned	2024-03-03	4166	\N	\N	nochomo
-3122	Instrument Out	2024-03-06	4166	\N	1074	nochomo
-3046	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3091	Instrument Out	2024-03-03	4166	\N	1072	nochomo
-3123	Instrument Returned	2024-03-06	4166	\N	\N	nochomo
-3047	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3048	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3092	Instrument Out	2024-03-03	4165	\N	1072	nochomo
-3124	Instrument Out	2024-03-06	4166	\N	1074	nochomo
-2264	Instrument Returned	2024-02-01	1731	\N	\N	postgres
-2266	Instrument Returned	2024-02-01	1768	\N	\N	postgres
-2268	Instrument Returned	2024-02-01	2072	\N	\N	postgres
-2270	Instrument Returned	2024-02-01	1595	\N	\N	postgres
-2272	Instrument Returned	2024-02-01	1618	\N	\N	postgres
-2274	Instrument Returned	2024-02-01	2072	\N	\N	postgres
-2276	Instrument Returned	2024-02-01	2072	\N	\N	postgres
-2278	Instrument Returned	2024-02-01	1768	\N	\N	postgres
-2280	Instrument Returned	2024-02-01	1618	\N	\N	postgres
-2282	Instrument Returned	2024-02-01	1731	\N	\N	postgres
-2284	Instrument Returned	2024-02-01	1595	\N	\N	postgres
-3049	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3093	Instrument Returned	2024-03-03	1757	\N	\N	nochomo
-3125	Instrument Returned	2024-03-06	4166	\N	\N	nochomo
-3050	Instrument Returned	2024-02-25	4166	\N	\N	nochomo
-3094	Instrument Returned	2024-03-03	1566	\N	\N	nochomo
-3126	Instrument Returned	2024-03-07	4165	\N	\N	nochomo
-3051	Instrument Returned	2024-02-28	4166	\N	\N	nochomo
-3095	Instrument Returned	2024-03-03	2098	\N	\N	nochomo
-3134	Instrument Out	2024-03-07	4166	\N	1074	postgres
-3052	Instrument Returned	2024-02-28	4166	\N	\N	nochomo
-3096	Instrument Out	2024-03-04	4164	\N	1072	nochomo
-3097	Instrument Returned	2024-03-04	4164	\N	\N	nochomo
-3098	Instrument Out	2024-03-04	4164	\N	1074	nochomo
-3138	Instrument Out	2024-03-07	4165	\N	1074	nochomo
-3053	Instrument Returned	2024-02-28	4166	\N	\N	nochomo
-3099	Instrument Out	2024-03-04	4163	\N	1074	nochomo
-3139	Instrument Returned	2024-03-07	4166	\N	\N	nochomo
-3140	Instrument Out	2024-03-07	4166	\N	1074	nochomo
-3054	Instrument Out	2024-03-01	4166	\N	1074	nochomo
-3100	Instrument Returned	2024-03-04	4163	\N	\N	nochomo
-3101	Instrument Returned	2024-03-04	4164	\N	\N	nochomo
-3102	Instrument Out	2024-03-04	4164	\N	1074	nochomo
-3141	Instrument Out	2024-03-07	4164	\N	1074	nochomo
-2977	Instrument Returned	2024-02-15	4166	\N	\N	nochomo
+COPY public.instrument_history (id, transaction_type, transaction_timestamp, item_id, notes, assigned_to, created_by, location, contact, returned_by_id) FROM stdin;
+3529	Instrument Returned	2024-06-24 14:27:14.39395+03	1906	\N	\N	kwando	\N	\N	1071
+3530	Instrument Returned	2024-06-24 14:27:14.39395+03	1818	\N	\N	kwando	\N	\N	1071
+3531	Instrument Returned	2024-06-24 14:27:14.39395+03	1873	\N	\N	kwando	\N	\N	1071
+3532	Instrument Returned	2024-06-24 14:27:14.39395+03	1856	\N	\N	kwando	\N	\N	1071
+3533	Instrument Returned	2024-06-24 14:27:14.39395+03	1496	\N	\N	kwando	\N	\N	1071
+3534	Instrument Returned	2024-06-24 15:34:23.115925+03	4163	\N	\N	nochomo	\N	\N	1074
 \.
 
 
 --
--- TOC entry 3932 (class 0 OID 24202)
--- Dependencies: 218
+-- TOC entry 3951 (class 0 OID 30968)
+-- Dependencies: 247
+-- Data for Name: instrument_requests; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.instrument_requests (id, created_at, user_id, instrument, quantity, status, success, unique_id, notes, attended_by, attended_by_id, instruments_granted, resolved_at) FROM stdin;
+84	2024-06-24 15:31:55.164114+03	1071	DUMMY 1	1	Pending	\N	1071841385837	\N	\N	\N	\N	\N
+\.
+
+
+--
+-- TOC entry 3946 (class 0 OID 30919)
+-- Dependencies: 237
 -- Data for Name: instruments; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.instruments (id, legacy_number, code, description, serial, state, location, make, model, legacy_code, number, user_name, user_id) FROM stdin;
-1734	216	\N	STAND, GUITAR	\N	Good	HS MUSIC	UNKNOWN	\N	\N	1	\N	\N
-1774	589	SXA	SAXOPHONE, ALTO	11110739	Good	INSTRUMENT STORE	ETUDE	\N	AX	24	\N	\N
-1773	519	FL	FLUTE	28411028	Good	INSTRUMENT STORE	PRELUDE	\N	FL	24	\N	\N
-1791	302	TBN	TUBANOS	\N	Good	MS MUSIC	REMO	14 inch	\N	4	\N	\N
-1798	401	BS	BASSOON	33CVC02	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	1	\N	\N
-1804	566	SXA	SAXOPHONE, ALTO	11120071	Good	INSTRUMENT STORE	ETUDE	\N	AX	1	\N	\N
-1809	622	SXA	SAXOPHONE, ALTO	YF57624	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	53	\N	\N
-1811	287	SR	SNARE	\N	Good	MS MUSIC	PEARL	\N	\N	3	\N	\N
-1813	207	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	7	\N	\N
-1821	631	SXA	SAXOPHONE, ALTO	BF54273	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	62	\N	\N
-1829	626	SXA	SAXOPHONE, ALTO	AF53354	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	57	\N	\N
-1818	243	CG	CONGA	\N	Good	MS MUSIC	MEINL	HEADLINER RANGE	\N	2	\N	\N
-1832	627	SXA	SAXOPHONE, ALTO	AF53345	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	58	\N	\N
-1835	630	SXA	SAXOPHONE, ALTO	BF54625	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	61	\N	\N
-1837	637	SXA	SAXOPHONE, ALTO	CF57292	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	68	\N	\N
-1838	638	SXA	SAXOPHONE, ALTO	CF57202	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	69	\N	\N
-1839	639	SXA	SAXOPHONE, ALTO	CF56658	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	70	\N	\N
-1782	78	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	46	\N	\N
-1784	79	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	47	\N	\N
-1789	80	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	48	\N	\N
-1792	56	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	24	\N	\N
-1793	36	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	4	\N	\N
-1799	37	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	5	\N	\N
-1801	33	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	1	\N	\N
-1807	653	SXT	SAXOPHONE, TENOR	N495304	Good	INSTRUMENT STORE	SELMER	\N	TX	9	\N	\N
-1840	238	CLV	CLAVES	\N	Good	MS MUSIC	LP	GRENADILLA	\N	2	\N	\N
-1841	251	CWB	COWBELL	\N	Good	MS MUSIC	LP	Black Beauty	\N	2	\N	\N
-1808	657	SXT	SAXOPHONE, TENOR	TS10050022	Good	INSTRUMENT STORE	BUNDY	\N	TX	13	\N	\N
-1781	525	FL	FLUTE	D1206510	Good	INSTRUMENT STORE	ETUDE	\N	FL	30	\N	\N
-1815	647	SXT	SAXOPHONE, TENOR	31840	Good	INSTRUMENT STORE	YAMAHA	\N	TX	3	\N	\N
-1775	25	TN	TROMBONE, TENOR	452363	Good	INSTRUMENT STORE	BLESSING	\N	TB	11	\N	\N
-1776	27	TN	TROMBONE, TENOR	9120158	Good	INSTRUMENT STORE	ETUDE	\N	TB	13	\N	\N
-1777	28	TN	TROMBONE, TENOR	9120243	Good	INSTRUMENT STORE	ETUDE	\N	TB	14	\N	\N
-1783	159	TP	TRUMPET, B FLAT	CAS15598	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	70	\N	\N
-1794	490	FL	FLUTE	2922376	Good	INSTRUMENT STORE	WT.AMSTRONG	104	FL	7	\N	\N
-1796	13	M	MELLOPHONE	L02630	Good	INSTRUMENT STORE	JUPITER	\N	M	1	\N	\N
-1802	562	OB	OBOE	B33327	Good	INSTRUMENT STORE	BUNDY	\N	OB	1	\N	\N
-1803	564	PC	PICCOLO	11010007	Good	INSTRUMENT STORE	BUNDY	\N	PC	1	\N	\N
-1778	29	TN	TROMBONE, TENOR	9120157	Good	INSTRUMENT STORE	ETUDE	\N	TB	15	\N	\N
-1779	30	TN	TROMBONE, TENOR	1107197	Good	INSTRUMENT STORE	ALLORA	\N	TB	16	\N	\N
-1780	31	TN	TROMBONE, TENOR	1107273	Good	INSTRUMENT STORE	ALLORA	\N	TB	17	\N	\N
-1735	226	BLT	BELLS, TUBULAR	\N	Good	HS MUSIC	ROSS	\N	\N	1	\N	\N
-1909	582	SXA	SAXOPHONE, ALTO	388666A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	17	\N	\N
-1910	583	SXA	SAXOPHONE, ALTO	T14584	Good	INSTRUMENT STORE	YAMAHA	YAS 23	AX	18	\N	\N
-1845	293	TR	TAMBOURINE	\N	Good	MS MUSIC	REMO	Fiberskyn 3 black	\N	2	\N	\N
-1846	199	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 2	EAVESTAFF	\N	\N	2	\N	\N
-1847	200	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 3	SPENCER	\N	\N	3	\N	\N
-1849	272	Q	QUAD, MARCHING	202902	Good	MS MUSIC	PEARL	Black	\N	1	\N	\N
-1850	385	GRT	GUITAR, HALF	11	Good	\N	KAY	\N	\N	1	\N	\N
-1851	387	GRT	GUITAR, HALF	9	Good	PRACTICE ROOM 3	KAY	\N	\N	3	\N	\N
-1852	267	EGS	EGG SHAKERS	\N	Good	MS MUSIC	LP	Black 2 pr	\N	2	\N	\N
-1853	271	MRC	MARACAS	\N	Good	MS MUSIC	LP	Pro Yellow Light Handle	\N	2	\N	\N
-1854	210	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	10	\N	\N
-1855	211	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	11	\N	\N
-2029	574	SXA	SAXOPHONE, ALTO	348075	Good	\N	YAMAHA	\N	AX	9	Mwende Mittelstadt	192
-1927	579	SXA	SAXOPHONE, ALTO	290365	Good	INSTRUMENT STORE	YAMAHA	\N	AX	14	\N	\N
-1858	306	WB	WOOD BLOCK	\N	Good	HS MUSIC	BLACK SWAMP	BLA-MWB1	\N	1	\N	\N
-1812	206	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	6	\N	\N
-1859	166	AM	AMPLIFIER	72168	Good	MS MUSIC	GALLEN-K	\N	\N	2	\N	\N
-1860	317	CMS	CYMBAL, SUSPENDED 18 INCH	AD 69101 046	Good	HS MUSIC	ZILDJIAN	Orchestral Selection ZIL-A0419	\N	1	\N	\N
-1862	348	GRB	GUITAR, BASS	CGF1307326	Good	DRUM ROOM 1	FENDER	\N	\N	5	\N	\N
-1863	388	GRT	GUITAR, HALF	4	Good	PRACTICE ROOM 3	KAY	\N	\N	4	\N	\N
-1864	168	AMB	AMPLIFIER, BASS	M 1053205	Good	DRUM ROOM 1	FENDER	BASSMAN	\N	4	\N	\N
-1866	393	GRT	GUITAR, HALF	8	Good	\N	KAY	\N	\N	9	\N	\N
-1873	242	CG	CONGA	\N	Good	MS MUSIC	YAMAHA	Red 14 inch	\N	1	\N	\N
-1867	247	CG	CONGA	ISK 3120157238	Good	MS MUSIC	LATIN PERCUSSION	12 inch	\N	4	\N	\N
-1868	248	CG	CONGA	ISK 23 JAN 02	Good	MS MUSIC	LATIN PERCUSSION	14 Inch	\N	5	\N	\N
-1869	244	CG	CONGA	ISK 3120138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	3	\N	\N
-1870	249	CG	CONGA	ISK 312138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	6	\N	\N
-1871	250	CG	CONGA	ISK 312120138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	7	\N	\N
-1865	46	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	MS MUSIC	TROMBA	Pro	PTB	14	\N	\N
-1875	183	KB	KEYBOARD	AH24202	Good	\N	ROLAND	813	\N	1	\N	\N
-1883	264	DK	DRUMSET	\N	Good	MS MUSIC	PEARL	Vision	\N	3	\N	\N
-1884	325	SR	SNARE	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	4	\N	\N
-1887	205	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	5	\N	\N
-1888	274	SRM	SNARE, MARCHING	1P-3095	Good	MS MUSIC	YAMAHA	MS 9014	\N	1	\N	\N
-1993	665	SXT	SAXOPHONE, TENOR	CF07553	Good	\N	JUPITER	JTS700	TX	21	Naomi Yohannes	361
-1890	22	TN	TROMBONE, TENOR	320963	Good	MS MUSIC	YAMAHA	\N	TB	8	\N	\N
-1881	39	TNAP	TROMBONE, ALTO - PLASTIC	BM17120413	Good	INSTRUMENT STORE	PBONE	Mini	PTB	7	\N	\N
-1882	41	TNAP	TROMBONE, ALTO - PLASTIC	BM17120388	Good	INSTRUMENT STORE	PBONE	Mini	PTB	9	\N	\N
-1889	164	SSP	SOUSAPHONE	910530	Good	MS MUSIC	YAMAHA	\N	T	1	\N	\N
-1912	241	SRC	SNARE, CONCERT	\N	Good	HS MUSIC	BLACK SWAMP	BLA-CM514BL	\N	1	\N	\N
-1913	297	TPT	TIMPANI, 23 INCH	52479	Good	HS MUSIC	LUDWIG	LKS423FG	\N	6	\N	\N
-1914	282	\N	SHIELD	\N	Good	HS MUSIC	GIBRALTAR	GIB-GDS-5	\N	1	\N	\N
-1917	280	PK	PRACTICE KIT	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	1	\N	\N
-1919	261	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	6	\N	\N
-1920	259	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	4	\N	\N
-1921	224	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	3	\N	\N
-1805	417	CL	CLARINET, B FLAT	989832	Good	INSTRUMENT STORE	BUNDY	\N	CL	9	\N	\N
-1810	107	TP	TRUMPET, B FLAT	H34971	Good	INSTRUMENT STORE	BLESSING	\N	TP	27	\N	\N
-1816	413	CL	CLARINET, B FLAT	7943	Good	INSTRUMENT STORE	YAMAHA	\N	CL	6	\N	\N
-1817	432	CL	CLARINET, B FLAT	444451	Good	INSTRUMENT STORE	YAMAHA	\N	CL	24	\N	\N
-1820	556	FL	FLUTE	BD62736	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	62	\N	\N
-1822	471	CL	CLARINET, B FLAT	YE67775	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	63	\N	\N
-1823	472	CL	CLARINET, B FLAT	YE67468	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	64	\N	\N
-1824	476	CL	CLARINET, B FLAT	BE63558	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	68	\N	\N
-1825	462	CL	CLARINET, B FLAT	XE50000	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	54	\N	\N
-1826	549	FL	FLUTE	YD66218	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	55	\N	\N
-1827	550	FL	FLUTE	YD66291	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	56	\N	\N
-1828	465	CL	CLARINET, B FLAT	XE54699	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	57	\N	\N
-1830	466	CL	CLARINET, B FLAT	XE54697	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	58	\N	\N
-1831	552	FL	FLUTE	BD62678	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	58	\N	\N
-1833	553	FL	FLUTE	BD63526	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	59	\N	\N
-1922	331	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	3	\N	\N
-1928	227	VS	VIBRASLAP	\N	Good	HS MUSIC	WEISS	SW-VIBRA	\N	1	\N	\N
-1834	554	FL	FLUTE	BD63433	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	60	\N	\N
-1737	576	SXA	SAXOPHONE, ALTO	3468	Good	INSTRUMENT STORE	BLESSING	\N	AX	11	\N	\N
-2098	62	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	30	\N	\N
-1925	235	CST	CASTANETS	\N	Good	HS MUSIC	DANMAR	DAN-17A	\N	1	\N	\N
-1733	611	SXA	SAXOPHONE, ALTO	XF53790	Good	\N	JUPITER	JAS 710	AX	42	Olivia Freiin Von Handel	933
-1530	315	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	4	\N	\N
-1926	169	AMB	AMPLIFIER, BASS	AX78271	Good	MS MUSIC	ROLAND	CUBE-100	\N	5	\N	\N
-1886	204	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	4	\N	\N
-1929	223	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	2	\N	\N
-1930	330	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	2	\N	\N
-1491	273	Q	QUAD, MARCHING	203143	Good	MS MUSIC	PEARL	Black	\N	2	\N	\N
-1492	276	SRM	SNARE, MARCHING	\N	Good	MS MUSIC	VERVE	White	\N	3	\N	\N
-1493	277	SRM	SNARE, MARCHING	\N	Good	MS MUSIC	VERVE	White	\N	4	\N	\N
-1495	75	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	43	\N	\N
-1497	76	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	44	\N	\N
-1504	77	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	45	\N	\N
-1506	48	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	16	\N	\N
-1507	51	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	19	\N	\N
-1980	52	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	20	\N	\N
-1981	53	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	21	\N	\N
-1932	333	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	5	\N	\N
-1933	334	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	6	\N	\N
-1934	335	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	7	\N	\N
-1935	167	AMB	AMPLIFIER, BASS	ICTB15016929	Good	HS MUSIC	FENDER	Rumble 25	\N	3	\N	\N
-1936	399	VN	VIOLIN	V2024618	Good	HS MUSIC	ANDREAS EASTMAN	\N	\N	4	\N	\N
-1937	298	TPD	TIMPANI, 26 INCH	51734	Good	HS MUSIC	LUDWIG	SUD-LKS426FG	\N	2	\N	\N
-1938	400	VN	VIOLIN	V2025159	Good	HS MUSIC	ANDREAS EASTMAN	\N	\N	5	\N	\N
-1939	326	TPN	TIMPANI, 29 INCH	36346	Good	HS MUSIC	LUDWIG	\N	\N	5	\N	\N
-1940	172	AMG	AMPLIFIER, GUITAR	ICTB1500267	Good	HS MUSIC	FENDER	Frontman 15G	\N	7	\N	\N
-1941	232	\N	MOUNTING BRACKET, BELL TREE	\N	Good	HS MUSIC	TREEWORKS	TW-TRE52	\N	1	\N	\N
-1942	327	TPW	TIMPANI, 32 INCH	36301	Good	HS MUSIC	LUDWIG	\N	\N	4	\N	\N
-1943	294	TRT	TAMBOURINE, 10 INCH	\N	Good	HS MUSIC	PEARL	Symphonic Double Row PEA-PETM1017	\N	1	\N	\N
-1944	222	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	1	\N	\N
-1945	329	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	1	\N	\N
-1947	165	AM	AMPLIFIER	M 1134340	Good	HS MUSIC	FENDER	\N	\N	1	\N	\N
-1948	229	BD	BASS DRUM	3442181	Good	HS MUSIC	LUDWIG	\N	\N	1	\N	\N
-1949	311	X	XYLOPHONE	\N	Good	HS MUSIC	DII	Decator	\N	18	\N	\N
-1950	174	AMK	AMPLIFIER, KEYBOARD	ODB#1230169	Good	HS MUSIC	PEAVEY	\N	\N	9	\N	\N
-1960	20	TN	TROMBONE, TENOR	071009A	Good	INSTRUMENT STORE	YAMAHA	\N	TB	6	\N	\N
-1953	328	X	XYLOPHONE	660845710719	Good	HS MUSIC	UNKNOWN	\N	\N	19	\N	\N
-1954	179	\N	MICROPHONE	\N	Good	HS MUSIC	SHURE	SM58	\N	1	\N	\N
-1955	233	CBS	CABASA	\N	Good	HS MUSIC	LP	LP234A	\N	1	\N	\N
-1956	268	GUR	GUIRO	\N	Good	HS MUSIC	LP	Super LP243	\N	1	\N	\N
-1957	231	BLR	BELL TREE	\N	Good	HS MUSIC	TREEWORKS	TW-TRE35	\N	1	\N	\N
-1958	270	MRC	MARACAS	\N	Good	HS MUSIC	WEISS	\N	\N	1	\N	\N
-1961	300	TGL	TRIANGLE	\N	Good	HS MUSIC	ALAN ABEL	6" Inch Symphonic	\N	1	\N	\N
-1962	236	CLV	CLAVES	\N	Good	HS MUSIC	LP	GRENADILLA	\N	3	\N	\N
-1963	368	GRC	GUITAR, CLASSICAL	HKPO64008	Good	MS MUSIC	YAMAHA	40	\N	12	\N	\N
-1964	369	GRC	GUITAR, CLASSICAL	HKP054554	Good	MS MUSIC	YAMAHA	40	\N	13	\N	\N
-1971	220	CWB	COWBELL	\N	Good	HS MUSIC	LP	Black Beauty	\N	1	\N	\N
-1972	337	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	9	\N	\N
-1973	338	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	10	\N	\N
-1974	339	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	11	\N	\N
-1975	340	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	12	\N	\N
-1976	341	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	13	\N	\N
-1977	342	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	14	\N	\N
-1978	171	AMB	AMPLIFIER, BASS	OJBHE2300098	Good	HS MUSIC	PEAVEY	TKO-230EU	\N	11	\N	\N
-1979	343	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	15	\N	\N
-1836	470	CL	CLARINET, B FLAT	YE67470	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	62	\N	\N
-1843	146	TP	TRUMPET, B FLAT	XA04125	Good	INSTRUMENT STORE	JUPITER	\N	TP	57	\N	\N
-1785	557	FL	FLUTE	DD58225	Good	\N	JUPITER	JFL 700	FL	63	Malan Chopra	927
-2073	446	CL	CLARINET, B FLAT	J65493	Good	\N	YAMAHA	\N	CL	38	Vashnie Joymungul	1032
-4163	\N	DMMO	DUMMY 1	DUMMM1	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	2	\N	\N
-1946	336	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	8	\N	\N
-1984	307	WB	WOOD BLOCK	\N	Good	MS MUSIC	LP	PLASTIC RED	\N	2	\N	\N
-1985	380	GRE	GUITAR, ELECTRIC	115085004	Good	HS MUSIC	FENDER	CD-60CE Mahogany	\N	26	\N	\N
-1986	308	WB	WOOD BLOCK	\N	Good	MS MUSIC	LP	PLASTIC BLUE	\N	3	\N	\N
-1987	269	GUR	GUIRO	\N	Good	MS MUSIC	LP	Plastic	\N	2	\N	\N
-1988	310	X	XYLOPHONE	587	Good	MS MUSIC	ROSS	410	\N	17	\N	\N
-1992	373	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	PARADISE	19	\N	19	\N	\N
-1998	390	GRT	GUITAR, HALF	3	Good	PRACTICE ROOM 3	KAY	\N	\N	6	\N	\N
-2000	382	GRE	GUITAR, ELECTRIC	115085034	Good	\N	FENDER	CD-60CE Mahogany	\N	25	\N	\N
-2001	266	DKE	DRUMSET, ELECTRIC	694318011177	Good	DRUM ROOM 2	ALESIS	DM8	\N	5	\N	\N
-2026	578	SXA	SAXOPHONE, ALTO	352128A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	13	\N	\N
-2003	197	PG	PIANO, GRAND	302697	Good	PIANO ROOM	GEBR. PERZINO	GBT 175	\N	1	\N	\N
-2004	198	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 1	ELSENBERG	\N	\N	1	\N	\N
-2005	391	GRT	GUITAR, HALF	1	Good	PRACTICE ROOM 3	KAY	\N	\N	7	\N	\N
-2007	392	GRT	GUITAR, HALF	12	Good	PRACTICE ROOM 3	KAY	\N	\N	8	\N	\N
-2008	395	GRT	GUITAR, HALF	6	Good	PRACTICE ROOM 3	KAY	\N	\N	11	\N	\N
-2009	228	AGG	AGOGO BELL	\N	Good	MS MUSIC	LP	577 Dry	\N	1	\N	\N
-2010	292	TR	TAMBOURINE	\N	Good	MS MUSIC	MEINL	Open face	\N	1	\N	\N
-2011	323	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	6	\N	\N
-2012	318	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	1	\N	\N
-2013	284	BLS	BELLS, SLEIGH	\N	Good	MS MUSIC	LUDWIG	Red Handle	\N	2	\N	\N
-2014	279	TTM	TOM, MARCHING	6 PAIRS	Good	HS MUSIC	PEARL	\N	\N	1	\N	\N
-2015	218	\N	STAND, MUSIC	\N	Good	MS MUSIC	GMS	\N	\N	2	\N	\N
-2016	305	WC	WIND CHIMES	\N	Good	MS MUSIC	LP	LP236D	\N	1	\N	\N
-2017	301	TGL	TRIANGLE	\N	Good	MS MUSIC	ALAN ABEL	6 inch	\N	2	\N	\N
-2018	234	CBS	CABASA	\N	Good	MS MUSIC	LP	Small	\N	2	\N	\N
-2019	202	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	2	\N	\N
-2020	237	CLV	CLAVES	\N	Good	MS MUSIC	KING	\N	\N	1	\N	\N
-2021	376	GRC	GUITAR, CLASSICAL	265931HRJ	Good	INSTRUMENT STORE	YAMAHA	40	\N	28	\N	\N
-1982	58	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	26	\N	\N
-2023	362	GRC	GUITAR, CLASSICAL	HKPO065675	Good	MS MUSIC	YAMAHA	40	\N	6	\N	\N
-2055	49	TNTP	TROMBONE, TENOR - PLASTIC	PR18100094	Good	\N	TROMBA	Pro	PTB	17	Lilyrose Trottier	357
-2002	15	TN	TROMBONE, TENOR	970406	Good	MS MUSIC	HOLTON	TR259	TB	1	\N	\N
-2030	191	PE	PIANO, ELECTRIC	YCQM01249	Good	MS MUSIC	YAMAHA	CAP 320	\N	4	\N	\N
-2027	19	TN	TROMBONE, TENOR	334792	Good	INSTRUMENT STORE	YAMAHA	\N	TB	5	\N	\N
-2033	481	CLB	CLARINET, BASS	43084	Good	INSTRUMENT STORE	YAMAHA	\N	BCL	3	\N	\N
-2034	189	PE	PIANO, ELECTRIC	GBRCKK 01006	Good	MUSIC OFFICE	YAMAHA	CVP303x	\N	2	\N	\N
-2035	190	PE	PIANO, ELECTRIC	7163	Good	MUSIC OFFICE	YAMAHA	CVP 87A	\N	3	\N	\N
-2036	366	GRC	GUITAR, CLASSICAL	HKP064183	Good	MS MUSIC	YAMAHA	40	\N	10	\N	\N
-2037	357	GRC	GUITAR, CLASSICAL	HKZ107832	Good	\N	YAMAHA	40	\N	1	\N	\N
-2038	358	GRC	GUITAR, CLASSICAL	HKZ034412	Good	MS MUSIC	YAMAHA	40	\N	2	\N	\N
-2039	359	GRC	GUITAR, CLASSICAL	HKP065151	Good	MS MUSIC	YAMAHA	40	\N	3	\N	\N
-2120	409	CL	CLARINET, B FLAT	7988	Good	\N	YAMAHA	\N	CL	4	Zecarun Caminha	538
-1856	87	TP	TRUMPET, B FLAT	638871	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	7	\N	\N
-1857	81	TP	TRUMPET, B FLAT	808845	Good	INSTRUMENT STORE	YAMAHA	\N	TP	1	\N	\N
-1874	415	CL	CLARINET, B FLAT	B 859866/7112-STORE	Good	\N	VITO	\N	CL	7	\N	\N
-1891	486	FL	FLUTE	600365	Good	INSTRUMENT STORE	YAMAHA	\N	FL	3	\N	\N
-1893	488	FL	FLUTE	452046A	Good	MS MUSIC	YAMAHA	\N	FL	5	\N	\N
-1896	89	TP	TRUMPET, B FLAT	556519	Good	INSTRUMENT STORE	YAMAHA	\N	TP	9	\N	\N
-1897	532	FL	FLUTE	AP28041129	Good	\N	PRELUDE	\N	FL	37	\N	\N
-1903	95	TP	TRUMPET, B FLAT	634070	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	15	\N	\N
-1904	110	TP	TRUMPET, B FLAT	501720	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	30	\N	\N
-1911	428	CL	CLARINET, B FLAT	J65540	Good	INSTRUMENT STORE	YAMAHA	\N	CL	20	\N	\N
-1916	112	TP	TRUMPET, B FLAT	638850	Good	MS MUSIC	YAMAHA	YTR 2335	TP	32	\N	\N
-1755	441	CL	CLARINET, B FLAT	J65382	Good	\N	YAMAHA	\N	CL	33	Moussa Sangare	929
-2040	421	CL	CLARINET, B FLAT	27303	Good	\N	YAMAHA	\N	CL	13	Naia Friedhoff Jaeschke	602
-1736	416	CL	CLARINET, B FLAT	504869	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	8	\N	\N
-1496	94	TP	TRUMPET, B FLAT	L306677	Good	INSTRUMENT STORE	BACH	Stradivarius 37L	TP	14	\N	\N
-1498	97	TP	TRUMPET, B FLAT	S-756323	Good	INSTRUMENT STORE	CONN	\N	TP	17	\N	\N
-1499	98	TP	TRUMPET, B FLAT	H35537	Good	INSTRUMENT STORE	BLESSING	BTR 1270	TP	18	\N	\N
-1500	102	TP	TRUMPET, B FLAT	H34929	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	22	\N	\N
-1501	104	TP	TRUMPET, B FLAT	H32053	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	24	\N	\N
-1502	105	TP	TRUMPET, B FLAT	H31491	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	25	\N	\N
-1503	108	TP	TRUMPET, B FLAT	F24304	Good	INSTRUMENT STORE	BLESSING	\N	TP	28	\N	\N
-1505	133	TP	TRUMPET, B FLAT	XA07789	Good	INSTRUMENT STORE	JUPITER	\N	TP	44	\N	\N
-1951	429	CL	CLARINET, B FLAT	J65851	Good	INSTRUMENT STORE	YAMAHA	\N	CL	21	\N	\N
-1952	442	CL	CLARINET, B FLAT	J65593	Good	INSTRUMENT STORE	YAMAHA	\N	CL	34	\N	\N
-1959	443	CL	CLARINET, B FLAT	J65299	Good	INSTRUMENT STORE	YAMAHA	\N	CL	35	\N	\N
-1965	499	FL	FLUTE	617224	Good	INSTRUMENT STORE	YAMAHA	\N	FL	11	\N	\N
-2096	580	SXA	SAXOPHONE, ALTO	362547A	Good	\N	YAMAHA	\N	AX	15	Caitlin Wood	160
-1764	575	SXA	SAXOPHONE, ALTO	387824A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	10	\N	\N
-1766	636	SXA	SAXOPHONE, ALTO	CF57086	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	67	\N	\N
-1966	420	CL	CLARINET, B FLAT	7980	Good	INSTRUMENT STORE	YAMAHA	\N	CL	12	\N	\N
-1967	434	CL	CLARINET, B FLAT	B88822	Good	INSTRUMENT STORE	YAMAHA	\N	CL	26	\N	\N
-1968	405	CL	CLARINET, B FLAT	206603A	Good	INSTRUMENT STORE	YAMAHA	\N	CL	2	\N	\N
-1969	485	FL	FLUTE	826706	Good	INSTRUMENT STORE	YAMAHA	222	FL	2	\N	\N
-2022	6	BH	BARITONE/EUPHONIUM	534386	Good	INSTRUMENT STORE	YAMAHA	\N	BH	7	\N	\N
-2024	403	CL	CLARINET, B FLAT	206681A	Good	INSTRUMENT STORE	YAMAHA	\N	CL	1	\N	\N
-2025	484	FL	FLUTE	609368	Good	INSTRUMENT STORE	YAMAHA	\N	FL	1	\N	\N
-1494	506	FL	FLUTE	K96338	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	15	\N	\N
-2032	407	CL	CLARINET, B FLAT	7291	Good	INSTRUMENT STORE	YAMAHA	\N	CL	3	\N	\N
-1739	431	CL	CLARINET, B FLAT	193026A	Good	\N	YAMAHA	\N	CL	23	Fatuma Tall	301
-1756	444	CL	CLARINET, B FLAT	J65434	Good	\N	YAMAHA	\N	CL	36	Anastasia Mulema	979
-1768	489	FL	FLUTE	42684	Good	INSTRUMENT STORE	EMERSON	EF1	FL	6	\N	\N
-1787	134	TP	TRUMPET, B FLAT	XA08653	Good	\N	JUPITER	\N	TP	45	Connor Fort	299
-1742	422	CL	CLARINET, B FLAT	206167	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	14	\N	\N
-1763	492	FL	FLUTE	650122	Good	INSTRUMENT STORE	YAMAHA	\N	FL	8	\N	\N
-1765	475	CL	CLARINET, B FLAT	BE63660	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	67	\N	\N
-1767	502	FL	FLUTE	K96367	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	13	\N	\N
-1770	518	FL	FLUTE	33111112	Good	INSTRUMENT STORE	PRELUDE	\N	FL	23	\N	\N
-1746	468	CL	CLARINET, B FLAT	XE54704	Good	\N	JUPITER	JCL710	CL	60	Lorian Inglis	358
-1786	122	TP	TRUMPET, B FLAT	124911	Good	\N	ETUDE	\N	TP	38	Mark Anding	1076
-1745	254	\N	STAND, CYMBAL	\N	Good	HS MUSIC	GIBRALTAR	GIB-5710	\N	1	\N	\N
-1747	296	TPT	TIMPANI, 23 INCH	36264	Good	MS MUSIC	LUDWIG	LKS423FG	\N	1	\N	\N
-1748	309	X	XYLOPHONE	25	Good	MS MUSIC	MAJESTIC	x55 352	\N	16	\N	\N
-1749	182	\N	PA SYSTEM, ALL-IN-ONE	S1402186AA8	Good	HS MUSIC	BEHRINGER	EPS500MP3	\N	1	\N	\N
-1570	96	TP	TRUMPET, B FLAT	33911	Good	\N	SCHILKE	B1L	TP	16	Mark Anding	1076
-1753	209	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	9	\N	\N
-1758	215	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	15	\N	\N
-1759	203	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	3	\N	\N
-1760	253	CMZ	CYMBALS, HANDHELD 18 INCH	ZIL-A0447	Good	HS MUSIC	ZILDJIAN	18 Inch Symphonic Viennese Tone	\N	1	\N	\N
-1761	378	GRW	GUITAR, CUTAWAY	\N	Good	MS MUSIC	UNKNOWN	\N	\N	15	\N	\N
-1762	379	GRW	GUITAR, CUTAWAY	\N	Good	MS MUSIC	UNKNOWN	\N	\N	16	\N	\N
-1769	304	TBN	TUBANOS	1-7	Good	MS MUSIC	REMO	12 inch	\N	7	\N	\N
-2064	263	DK	DRUMSET	\N	Good	DRUM ROOM 1	YAMAHA	\N	\N	2	\N	\N
-2061	361	GRC	GUITAR, CLASSICAL	HKZ114314	Good	MS MUSIC	YAMAHA	40	\N	5	\N	\N
-2065	324	DK	DRUMSET	\N	Good	DRUM ROOM 2	YAMAHA	\N	\N	6	\N	\N
-2066	411	CL	CLARINET, B FLAT	27251	Good	\N	YAMAHA	\N	CL	5	Mark Anding	1076
-1885	398	VN	VIOLIN	D 0933 1998	Good	\N	WILLIAM LEWIS & SON	\N	\N	3	Gakenia Mucharie	1075
-4164	\N	DMMO	DUMMY 1	DUMMM2	Good	\N	DUMMY MAKER	DUMDUM	\N	3	\N	1074
-1771	588	SXA	SAXOPHONE, ALTO	11110695	Good	INSTRUMENT STORE	ETUDE	\N	AX	23	\N	\N
-1790	613	SXA	SAXOPHONE, ALTO	XF56401	Good	\N	JUPITER	JAS 710	AX	44	Emiel Ghelani-Decorte	662
-1877	614	SXA	SAXOPHONE, ALTO	XF57089	Good	\N	JUPITER	JAS 710	AX	45	Fatuma Tall	301
-2059	402	CLE	CLARINET, ALTO IN E FLAT	1260	Good	\N	YAMAHA	\N	\N	1	Mark Anding	1076
-1879	634	SXA	SAXOPHONE, ALTO	BF54604	Good	\N	JUPITER	JAS 710	AX	65	Ethan Sengendo	393
-2060	610	SXA	SAXOPHONE, ALTO	XF54140	Good	\N	JUPITER	JAS 710	AX	41	Lucile Bamlango	176
-1878	615	SXA	SAXOPHONE, ALTO	XF57192	Good	\N	JUPITER	JAS 710	AX	46	Max Stock	956
-2056	120	TP	TRUMPET, B FLAT	124816	Good	\N	ETUDE	\N	TP	37	Masoud Ibrahim	787
-1743	126	TP	TRUMPET, B FLAT	H35214	Good	\N	BLESSING	\N	TP	40	Masoud Ibrahim	787
-1588	478	CL	CLARINET, B FLAT	BE63657	Good	\N	JUPITER	JCL710	CL	70	Gakenia Mucharie	1075
-1514	140	TP	TRUMPET, B FLAT	XA06017	Good	INSTRUMENT STORE	JUPITER	\N	TP	51	\N	\N
-1772	667	SXT	SAXOPHONE, TENOR	CF08026	Good	INSTRUMENT STORE	JUPITER	JTS700	TX	23	\N	\N
-1741	32	TN	TROMBONE, TENOR	646721	Good	\N	YAMAHA	\N	TB	18	Andrew Wachira	268
-1892	24	TN	TROMBONE, TENOR	316975	Good	\N	YAMAHA	\N	TB	10	Margaret Oganda	1078
-1861	12	HNF	HORN, F	BC00278	Good	\N	JUPITER	JHR1100	HN	5	Kai O'Bra	480
-1527	573	SXA	SAXOPHONE, ALTO	200547	Good	INSTRUMENT STORE	GIARDINELLI	\N	AX	8	\N	\N
-1511	137	TP	TRUMPET, B FLAT	XA08294	Good	INSTRUMENT STORE	JUPITER	\N	TP	48	\N	\N
-1582	180	\N	MICROPHONE	\N	Good	HS MUSIC	SHURE	SM58	\N	2	\N	\N
-1723	312	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	1	\N	\N
-1534	569	SXA	SAXOPHONE, ALTO	11120109	Good	INSTRUMENT STORE	ETUDE	\N	AX	4	\N	\N
-1512	138	TP	TRUMPET, B FLAT	XA08319	Good	INSTRUMENT STORE	JUPITER	\N	TP	49	\N	\N
-1725	397	VN	VIOLIN	3923725	Good	INSTRUMENT STORE	AUBERT	\N	\N	2	\N	\N
-1548	571	SXA	SAXOPHONE, ALTO	12080618	Good	INSTRUMENT STORE	ETUDE	\N	AX	6	\N	\N
-1555	612	SXA	SAXOPHONE, ALTO	XF56514	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	43	\N	\N
-1578	584	SXA	SAXOPHONE, ALTO	AS1001039	Good	INSTRUMENT STORE	BARRINGTON	\N	AX	19	\N	\N
-1580	568	SXA	SAXOPHONE, ALTO	11120090	Good	INSTRUMENT STORE	ETUDE	\N	AX	3	\N	\N
-1602	585	SXA	SAXOPHONE, ALTO	AS1003847	Good	INSTRUMENT STORE	BARRINGTON	\N	AX	20	\N	\N
-1726	45	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	13	\N	\N
-1728	34	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	2	\N	\N
-1549	35	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	3	\N	\N
-1931	332	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	4	\N	\N
-1579	50	TNTP	TROMBONE, TENOR - PLASTIC	PB17070322	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	18	\N	\N
-1526	645	SXT	SAXOPHONE, TENOR	403557	Good	INSTRUMENT STORE	VITO	\N	TX	1	\N	\N
-1528	652	SXT	SAXOPHONE, TENOR	N4200829	Good	INSTRUMENT STORE	SELMER	\N	TX	8	\N	\N
-1532	650	SXT	SAXOPHONE, TENOR	310278	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	TX	6	\N	\N
-1536	659	SXT	SAXOPHONE, TENOR	13120021	Good	INSTRUMENT STORE	ALLORA	\N	TX	15	\N	\N
-1724	9	HNF	HORN, F	619468	Good	INSTRUMENT STORE	HOLTON	H281	HN	2	\N	\N
-1727	480	CLB	CLARINET, BASS	Y3717	Good	INSTRUMENT STORE	VITO	\N	BCL	2	\N	\N
-1518	640	SXB	SAXOPHONE, BARITONE	1360873	Good	INSTRUMENT STORE	SELMER	\N	BX	1	\N	\N
-1540	644	SXB	SAXOPHONE, BARITONE	CF05160	Good	INSTRUMENT STORE	JUPITER	JBS 1000	BX	5	\N	\N
-1517	163	TB	TUBA	\N	Good	INSTRUMENT STORE	BOOSEY & HAWKES	Imperial  EEb	T	3	\N	\N
-1544	303	TBN	TUBANOS	\N	Good	MS MUSIC	REMO	10 Inch	\N	5	\N	\N
-1551	170	AMB	AMPLIFIER, BASS	Z9G3740	Good	MS MUSIC	ROLAND	Cube-120 XL	\N	6	\N	\N
-1552	173	AMG	AMPLIFIER, GUITAR	M 1005297	Good	MS MUSIC	FENDER	STAGE 160	\N	8	\N	\N
-4165	\N	DMMO	DUMMY 1	DUMMM3	New	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	4	\N	\N
-4166	\N	DMMO	DUMMY 1	DUMMM4	New	\N	DUMMY MAKER	\N	\N	5	\N	1072
-1559	252	CMY	CYMBALS, HANDHELD 16 INCH	\N	Good	HS MUSIC	SABIAN	SAB SR 16BOL	\N	1	\N	\N
-1581	175	AMK	AMPLIFIER, KEYBOARD	OBD#1230164	Good	MS MUSIC	PEAVEY	KB4	\N	10	\N	\N
-1583	184	KB	KEYBOARD	TCK 611	Good	HS MUSIC	CASIO	\N	\N	2	\N	\N
-1584	256	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	2	\N	\N
-1585	258	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	3	\N	\N
-1586	260	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	5	\N	\N
-1587	255	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	1	\N	\N
-1589	14	MTL	METALLOPHONE	\N	Good	\N	ORFF	\N	\N	1	\N	\N
-1590	187	KB	KEYBOARD	\N	Good	\N	CASIO	TC-360	\N	23	\N	\N
-1591	217	\N	STAND, MUSIC	50052	Good	\N	WENGER	\N	\N	1	\N	\N
-1597	176	AMG	AMPLIFIER, GUITAR	S190700059B4P	Good	\N	BUGERA	\N	\N	12	\N	\N
-1599	320	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	3	\N	\N
-1600	177	AMG	AMPLIFIER, GUITAR	B-749002	Good	\N	FENDER	Blue Junior	\N	13	\N	\N
-1601	351	GRA	GUITAR, ACOUSTIC	\N	Good	\N	UNKNOWN	\N	\N	32	\N	\N
-1604	322	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	5	\N	\N
-1513	139	TP	TRUMPET, B FLAT	XA08322	Good	INSTRUMENT STORE	JUPITER	\N	TP	50	\N	\N
-1515	141	TP	TRUMPET, B FLAT	XA05452	Good	INSTRUMENT STORE	JUPITER	\N	TP	52	\N	\N
-1605	319	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	2	\N	\N
-1607	291	SRM	SNARE, MARCHING	1P-3086	Good	MS MUSIC	YAMAHA	MS 9014	\N	6	\N	\N
-1609	620	SXA	SAXOPHONE, ALTO	XF56962	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	51	\N	\N
-1612	633	SXA	SAXOPHONE, ALTO	BF54617	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	64	\N	\N
-1638	586	SXA	SAXOPHONE, ALTO	AS 1010089	Good	INSTRUMENT STORE	BARRINGTON	\N	AX	21	\N	\N
-1655	607	SXA	SAXOPHONE, ALTO	XF54539	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	38	\N	\N
-1658	609	SXA	SAXOPHONE, ALTO	XF54577	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	40	\N	\N
-1615	225	TDR	TALKING DRUM	\N	Good	MS MUSIC	REMO	Small	\N	1	\N	\N
-1616	212	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	12	\N	\N
-1617	178	AMG	AMPLIFIER, GUITAR	LCB500-A126704	Good	\N	FISHMAN	494-000-582	\N	14	\N	\N
-1619	286	SR	SNARE	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	2	\N	\N
-1620	181	MX	MIXER	BGXL01101	Good	MS MUSIC	YAMAHA	MG12XU	\N	15	\N	\N
-1622	347	GRB	GUITAR, BASS	15020198	Good	HS MUSIC	SQUIER	Modified Jaguar	\N	4	\N	\N
-1623	240	\N	CRADLE, CONCERT CYMBAL	\N	Good	HS MUSIC	GIBRALTAR	GIB-7614	\N	1	\N	\N
-1631	381	GRE	GUITAR, ELECTRIC	15029891	Good	HS MUSIC	SQUIER	StratPkHSSCAR	\N	1	\N	\N
-1686	577	SXA	SAXOPHONE, ALTO	11120110	Good	INSTRUMENT STORE	ETUDE	\N	AX	12	\N	\N
-1688	590	SXA	SAXOPHONE, ALTO	11110696	Good	INSTRUMENT STORE	ETUDE	\N	AX	25	\N	\N
-1693	591	SXA	SAXOPHONE, ALTO	91145	Good	INSTRUMENT STORE	CONSERVETE	\N	AX	26	\N	\N
-1624	54	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	22	\N	\N
-1625	55	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	23	\N	\N
-1626	63	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	31	\N	\N
-1627	65	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	33	\N	\N
-1628	67	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	35	\N	\N
-1664	314	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	3	\N	\N
-1629	69	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	37	\N	\N
-1675	352	GRA	GUITAR, ACOUSTIC	00Y224811	Good	\N	YAMAHA	F 325	\N	19	\N	\N
-1676	353	GRA	GUITAR, ACOUSTIC	00Y224884	Good	\N	YAMAHA	F 325	\N	20	\N	\N
-1630	70	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	38	\N	\N
-1634	71	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	39	\N	\N
-1635	72	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	40	\N	\N
-1637	73	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	41	\N	\N
-1682	59	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	27	\N	\N
-1683	354	GRA	GUITAR, ACOUSTIC	00Y145219	Good	\N	YAMAHA	F 325	\N	22	\N	\N
-1690	245	CG	CONGA	\N	Good	HS MUSIC	YAMAHA	\N	\N	24	\N	\N
-1691	246	CG	CONGA	\N	Good	HS MUSIC	YAMAHA	\N	\N	25	\N	\N
-1666	201	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	1	\N	\N
-1685	60	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	28	\N	\N
-1689	61	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	29	\N	\N
-1695	44	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	12	\N	\N
-1697	221	PD	PRACTICE PAD	ISK NO.26	Good	UPPER ES MUSIC	YAMAHA	4 INCH	\N	1	\N	\N
-1707	355	GRA	GUITAR, ACOUSTIC	00Y224899	Good	HS MUSIC	YAMAHA	F 325	\N	23	\N	\N
-1708	356	GRA	GUITAR, ACOUSTIC	00Y224741	Good	HS MUSIC	YAMAHA	F 325	\N	24	\N	\N
-1709	194	PE	PIANO, ELECTRIC	BCAZ01088	Good	LOWER ES MUSIC	YAMAHA	CLP 7358	\N	9	\N	\N
-1711	281	PD	PRACTICE PAD	\N	Good	UPPER ES MUSIC	YAMAHA	4 INCH	\N	2	\N	\N
-1717	375	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	YAMAHA	40	\N	27	\N	\N
-1684	655	SXT	SAXOPHONE, TENOR	420486	Good	INSTRUMENT STORE	VITO	\N	TX	11	\N	\N
-1516	142	TP	TRUMPET, B FLAT	XA06111	Good	INSTRUMENT STORE	JUPITER	\N	TP	53	\N	\N
-2129	\N	DMMO	DUMMY 1	\N	Good	\N	DUMMY MAKER	DUMMY MODEL	\N	1	\N	1074
-1994	602	SXA	SAXOPHONE, ALTO	XF54322	Good	\N	JUPITER	JAS 710	AX	33	Noah Ochomo	1071
-2058	593	SXA	SAXOPHONE, ALTO	XF54181	Good	\N	JUPITER	JAS 710	AX	28	Romilly Haysmith	937
-1906	651	SXT	SAXOPHONE, TENOR	10355	Good	\N	YAMAHA	\N	TX	7	Noah Ochomo	1071
-1744	658	SXT	SAXOPHONE, TENOR	13120005	Good	\N	ALLORA	\N	TX	14	Ochieng Simbiri	300
-2054	661	SXT	SAXOPHONE, TENOR	XF03739	Good	\N	JUPITER	\N	TX	17	Rohan Giri	454
-2087	162	TB	TUBA	533558	Good	MS MUSIC	YAMAHA	\N	T	2	\N	\N
-1752	208	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	8	\N	\N
-1732	372	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	PARADISE	18	\N	18	\N	\N
-2090	195	PE	PIANO, ELECTRIC	BCZZ01016	Good	UPPER ES MUSIC	YAMAHA	CLP-645B	\N	7	\N	\N
-2091	188	PE	PIANO, ELECTRIC	GBRCKK 01021	Good	THEATRE/FOYER	YAMAHA	CVP 303	\N	1	\N	\N
-2079	192	PE	PIANO, ELECTRIC	YCQN01006	Good	HS MUSIC	YAMAHA	CAP 329	\N	5	\N	\N
-2081	193	PE	PIANO, ELECTRIC	EBQN02222	Good	HS MUSIC	YAMAHA	P-95	\N	6	\N	\N
-2082	262	DK	DRUMSET	\N	Good	HS MUSIC	YAMAHA	\N	\N	1	\N	\N
-2083	239	BLC	BELLS, CONCERT	112158	Good	HS MUSIC	YAMAHA	YG-250D Standard	\N	1	\N	\N
-2085	289	SR	SNARE	\N	Good	HS MUSIC	YAMAHA	\N	\N	27	\N	\N
-2086	290	SR	SNARE	\N	Good	HS MUSIC	YAMAHA	\N	\N	28	\N	\N
-1667	213	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	13	\N	\N
-1519	151	TP	TRUMPET, B FLAT	BA09236	Good	INSTRUMENT STORE	JUPITER	\N	TP	62	\N	\N
-1520	152	TP	TRUMPET, B FLAT	BA08359	Good	INSTRUMENT STORE	JUPITER	\N	TP	63	\N	\N
-1521	154	TP	TRUMPET, B FLAT	BA09193	Good	INSTRUMENT STORE	JUPITER	\N	TP	65	\N	\N
-1522	155	TP	TRUMPET, B FLAT	CA15052	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	66	\N	\N
-1523	156	TP	TRUMPET, B FLAT	CA16033	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	67	\N	\N
-1524	157	TP	TRUMPET, B FLAT	CAS15546	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	68	\N	\N
-1525	158	TP	TRUMPET, B FLAT	CAS16006	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	69	\N	\N
-1529	500	FL	FLUTE	K96337	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	12	\N	\N
-1535	423	CL	CLARINET, B FLAT	282570	Good	INSTRUMENT STORE	VITO	\N	CL	15	\N	\N
-1537	424	CL	CLARINET, B FLAT	206244	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	16	\N	\N
-1538	508	FL	FLUTE	2SP-K96103	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	16	\N	\N
-1539	4	BH	BARITONE/EUPHONIUM	987998	Good	INSTRUMENT STORE	KING	\N	BH	5	\N	\N
-1541	541	FL	FLUTE	XD59821	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	46	\N	\N
-1542	542	FL	FLUTE	XD59741	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	47	\N	\N
-1543	561	FL	FLUTE	DD58003	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	67	\N	\N
-1545	84	TP	TRUMPET, B FLAT	H31816	Good	INSTRUMENT STORE	BLESSING	\N	TP	4	\N	\N
-1546	147	TP	TRUMPET, B FLAT	XA14523	Good	INSTRUMENT STORE	JUPITER	\N	TP	58	\N	\N
-1547	85	TP	TRUMPET, B FLAT	831664	Good	INSTRUMENT STORE	JUPITER	\N	TP	5	\N	\N
-1553	537	FL	FLUTE	WD62143	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	42	\N	\N
-1554	451	CL	CLARINET, B FLAT	1312128	Good	INSTRUMENT STORE	ALLORA	\N	CL	43	\N	\N
-1556	452	CL	CLARINET, B FLAT	1312139	Good	INSTRUMENT STORE	ALLORA	\N	CL	44	\N	\N
-1557	539	FL	FLUTE	XD59192	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	44	\N	\N
-1558	453	CL	CLARINET, B FLAT	KE54780	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	45	\N	\N
-1608	526	FL	FLUTE	D1206521	Good	INSTRUMENT STORE	ETUDE	\N	FL	31	\N	\N
-1610	460	CL	CLARINET, B FLAT	XE54946	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	52	\N	\N
-1611	558	FL	FLUTE	DD57954	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	64	\N	\N
-1613	559	FL	FLUTE	DD58158	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	65	\N	\N
-1614	474	CL	CLARINET, B FLAT	BE63671	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	66	\N	\N
-1633	504	FL	FLUTE	2SP-K90658	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	14	\N	\N
-1636	520	FL	FLUTE	28411029	Good	INSTRUMENT STORE	PRELUDE	711	FL	25	\N	\N
-1657	448	CL	CLARINET, B FLAT	1209179	Good	INSTRUMENT STORE	ETUDE	\N	CL	40	\N	\N
-1659	449	CL	CLARINET, B FLAT	1209180	Good	INSTRUMENT STORE	ETUDE	\N	CL	41	\N	\N
-1660	450	CL	CLARINET, B FLAT	1209177	Good	INSTRUMENT STORE	ETUDE	\N	CL	42	\N	\N
-1661	544	FL	FLUTE	XD59774	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	49	\N	\N
-1662	545	FL	FLUTE	XD59164	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	50	\N	\N
-1663	459	CL	CLARINET, B FLAT	KE54774	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	51	\N	\N
-1665	487	FL	FLUTE	T479	Good	INSTRUMENT STORE	HEIMAR	\N	FL	4	\N	\N
-1677	148	TP	TRUMPET, B FLAT	XA14343	Good	INSTRUMENT STORE	JUPITER	\N	TP	59	\N	\N
-1678	149	TP	TRUMPET, B FLAT	XA033335	Good	INSTRUMENT STORE	JUPITER	\N	TP	60	\N	\N
-1679	150	TP	TRUMPET, B FLAT	BA09439	Good	INSTRUMENT STORE	JUPITER	\N	TP	61	\N	\N
-1680	418	CL	CLARINET, B FLAT	30614E	Good	INSTRUMENT STORE	SIGNET	\N	CL	10	\N	\N
-1681	419	CL	CLARINET, B FLAT	B59862	Good	INSTRUMENT STORE	VITO	\N	CL	11	\N	\N
-1692	521	FL	FLUTE	K98973	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	26	\N	\N
-1694	522	FL	FLUTE	P11876	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	27	\N	\N
-1696	436	CL	CLARINET, B FLAT	11299279	Good	INSTRUMENT STORE	ETUDE	\N	CL	28	\N	\N
-1719	523	FL	FLUTE	K98879	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	28	\N	\N
-1720	437	CL	CLARINET, B FLAT	11299280	Good	INSTRUMENT STORE	ETUDE	\N	CL	29	\N	\N
-1721	524	FL	FLUTE	K99078	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	29	\N	\N
-1618	374	GRC	GUITAR, CLASSICAL	\N	Good	INSTRUMENT STORE	PARADISE	20	\N	20	\N	\N
-1712	598	SXA	SAXOPHONE, ALTO	XF54370	Good	\N	JUPITER	JAS 710	AX	31	Emilie Wittmann	659
-1722	438	CL	CLARINET, B FLAT	11299277	Good	INSTRUMENT STORE	ETUDE	\N	CL	30	\N	\N
-1729	563	OB	OBOE	B33402	Good	INSTRUMENT STORE	BUNDY	\N	OB	2	\N	\N
-1730	565	PC	PICCOLO	12111016	Good	INSTRUMENT STORE	BUNDY	\N	PC	2	\N	\N
-1508	118	TP	TRUMPET, B FLAT	H35268	Good	INSTRUMENT STORE	BLESSING	\N	TP	36	\N	\N
-1509	135	TP	TRUMPET, B FLAT	XA08649	Good	INSTRUMENT STORE	JUPITER	\N	TP	46	\N	\N
-1510	136	TP	TRUMPET, B FLAT	XA08643	Good	INSTRUMENT STORE	JUPITER	\N	TP	47	\N	\N
-2084	515	FL	FLUTE	917792	Good	MS MUSIC	YAMAHA	\N	FL	20	\N	\N
-2063	93	TP	TRUMPET, B FLAT	553853	Good	\N	YAMAHA	YTR 2335	TP	13	Natéa Firzé Al Ghaoui	541
-1989	109	TP	TRUMPET, B FLAT	G27536	Good	\N	BLESSING	\N	TP	29	Noah Ochomo	1071
-1999	454	CL	CLARINET, B FLAT	KE56526	Good	\N	JUPITER	JCL710	CL	46	Noah Ochomo	1071
-1880	555	FL	FLUTE	BD62784	Good	\N	JUPITER	JEL 710	FL	61	Nora Saleem	931
-1848	455	CL	CLARINET, B FLAT	KE56579	Good	\N	JUPITER	JCL710	CL	47	Owen Harris	115
-1595	516	FL	FLUTE	J94358	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	21	\N	\N
-1700	130	TP	TRUMPET, B FLAT	35272	Good	\N	BLESSING	\N	TP	42	Ainsley Hire	959
-1699	128	TP	TRUMPET, B FLAT	34928	Good	\N	BLESSING	\N	TP	41	Ansh Mehta	482
-1718	426	CL	CLARINET, B FLAT	25247	Good	\N	YAMAHA	\N	CL	18	Balazs Meyers	976
-1704	547	FL	FLUTE	YD66330	Good	\N	JUPITER	JEL 710	FL	53	Eliana Hodge	945
-1702	145	TP	TRUMPET, B FLAT	XA04094	Good	\N	JUPITER	\N	TP	56	Etienne Carlevato	980
-1716	82	TP	TRUMPET, B FLAT	G29437	Good	\N	BLESSING	\N	TP	2	Fatima Zucca	539
-1594	494	FL	FLUTE	G15104	Good	\N	GEMEINHARDT	2SP	FL	9	Margaret Oganda	1078
-1674	68	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	PBONE	\N	PTB	36	Arhum Bid	240
-1687	656	SXT	SAXOPHONE, TENOR	TS10050027	Good	INSTRUMENT STORE	BUNDY	\N	TX	12	\N	\N
-1566	11	HNF	HORN, F	XC07411	Good	INSTRUMENT STORE	JUPITER	JHR700	HN	4	\N	\N
-1705	648	SXT	SAXOPHONE, TENOR	26286	Good	\N	YAMAHA	\N	TX	4	\N	\N
-1701	663	SXT	SAXOPHONE, TENOR	AF04276	Good	\N	JUPITER	\N	TX	19	Ean Kimuli	962
-1872	10	HNF	HORN, F	602	Good	\N	HOLTON	\N	HN	3	Jamison Line	172
-1800	479	CLB	CLARINET, BASS	18250	Good	INSTRUMENT STORE	VITO	\N	BCL	1	\N	\N
-1806	483	CLB	CLARINET, BASS	CE69047	Good	\N	JUPITER	JBC 1000	BCL	5	Mikael Eshetu	935
-1606	321	BK	BELL KIT	\N	Good	\N	PEARL	PK900C	\N	4	Mahori	\N
-1596	496	FL	FLUTE	2SP-L89133	Good	\N	GEMEINHARDT	\N	FL	10	Zoe Mcdowell	\N
-1842	642	SXB	SAXOPHONE, BARITONE	XF05936	Good	PIANO ROOM	JUPITER	JBS 1000	BX	3	\N	\N
-1788	641	SXB	SAXOPHONE, BARITONE	B15217	Good	\N	VIENNA	\N	BX	2	Fatuma Tall	301
-1814	38	TNAP	TROMBONE, ALTO - PLASTIC	BM18030151	Good	INSTRUMENT STORE	PBONE	Mini	PTB	6	\N	\N
-1750	40	TNAP	TROMBONE, ALTO - PLASTIC	BM17120387	Good	INSTRUMENT STORE	PBONE	Mini	PTB	8	\N	\N
-1565	350	VCL	CELLO, (VIOLONCELLO)	\N	Good	\N	WENZER KOHLER	\N	C	2	Mark Anding	1076
-1795	7	BT	BARITONE/TENOR HORN	575586	Good	INSTRUMENT STORE	BESSON	\N	BH	1	\N	\N
-1797	160	TPP	TRUMPET, POCKET	PT1309020	Good	INSTRUMENT STORE	ALLORA	\N	TPP	1	\N	\N
-1598	90	TP	TRUMPET, B FLAT	F24090	Good	\N	BLESSING	\N	TP	10	Gakenia Mucharie	1075
-1714	463	CL	CLARINET, B FLAT	XE54729	Good	\N	JUPITER	JCL710	CL	55	Lauren Mucci	981
-1698	477	CL	CLARINET, B FLAT	BE63692	Good	\N	JUPITER	JCL710	CL	69	Olivia Patel	601
-1592	572	SXA	SAXOPHONE, ALTO	200585	Good	\N	GIARDINELLI	\N	AX	7	Gwendolyn Anding	1077
-1710	619	SXA	SAXOPHONE, ALTO	XF56406	Good	\N	JUPITER	JAS 710	AX	50	Luke O'Hara	481
-2046	625	SXA	SAXOPHONE, ALTO	AF53425	Good	\N	JUPITER	JAS 710	AX	56	Milan Jayaram	967
-1713	632	SXA	SAXOPHONE, ALTO	BF54335	Good	\N	JUPITER	JAS 710	AX	63	Tawheed Hussain	177
-1703	604	SXA	SAXOPHONE, ALTO	XF54451	Good	\N	JUPITER	JAS 710	AX	35	Uzima Otieno	911
-1706	47	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	TROMBA	Pro	PTB	15	Kianu Ruiz Stannah	276
-1593	8	HNF	HORN, F	619528	Good	\N	HOLTON	H281	HN	1	Gwendolyn Anding	1077
-1603	349	VCL	CELLO, (VIOLONCELLO)	100725	Good	\N	CREMONA	\N	C	1	Gwendolyn Anding	1077
-1621	383	GRE	GUITAR, ELECTRIC	116108513	Good	\N	FENDER	CD-60CE Mahogany	\N	30	Gakenia Mucharie	1075
-1715	346	GRB	GUITAR, BASS	ICS10191321	Good	\N	FENDER	Squire	\N	3	Isla Willis	925
-2057	606	SXA	SAXOPHONE, ALTO	XF54452	Good	\N	JUPITER	JAS 710	AX	37	Tanay Cherickel	974
-1905	111	TP	TRUMPET, B FLAT	645447	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	31	\N	\N
-1754	5	BH	BARITONE/EUPHONIUM	533835	Good	\N	YAMAHA	\N	BH	6	Saqer Alnaqbi	942
-2044	543	FL	FLUTE	XD59816	Good	\N	JUPITER	JEL 710	FL	48	Teagan Wood	159
-2050	535	FL	FLUTE	WD62108	Good	\N	JUPITER	JEL 710	FL	40	Yoonseo Choi	953
-1740	427	CL	CLARINET, B FLAT	J65020	Good	\N	YAMAHA	\N	CL	19	Zayn Khalid	975
-1844	605	SXA	SAXOPHONE, ALTO	XF53797	Good	\N	JUPITER	JAS 710	AX	36	Thomas Higgins	342
-1819	608	SXA	SAXOPHONE, ALTO	XF54476	Good	\N	JUPITER	JAS 710	AX	39	Tobias Godfrey	179
-2097	43	TNTP	TROMBONE, TENOR - PLASTIC	PB17070488	Good	\N	TROMBA	Pro	PTB	11	Titu Tulga	788
-1990	666	SXT	SAXOPHONE, TENOR	CF07965	Good	\N	JUPITER	JTS700	TX	22	Tawheed Hussain	177
-2043	23	TN	TROMBONE, TENOR	303168	Good	\N	YAMAHA	\N	TB	9	Zameer Nanji	257
-1757	433	CL	CLARINET, B FLAT	405117	Good	INSTRUMENT STORE	YAMAHA	\N	CL	25	\N	\N
-1876	313	BL	BELL SET	\N	Good	\N	UNKNOWN	\N	\N	2	Selma Mensah	958
-1908	363	GRC	GUITAR, CLASSICAL	HKZ104831	Good	MS MUSIC	YAMAHA	40	\N	7	\N	\N
-1738	467	CL	CLARINET, B FLAT	XE54680	Good	\N	JUPITER	JCL710	CL	59	Aisha Awori	960
-1902	456	CL	CLARINET, B FLAT	KE56608	Good	\N	JUPITER	JCL710	CL	48	Ariel Mutombo	948
-1901	1	BH	BARITONE/EUPHONIUM	601249	Good	\N	BOOSEY & HAWKES	Soveriegn	BH	2	Kasra Feizzadeh	135
-2101	101	TP	TRUMPET, B FLAT	H35502	Good	\N	BLESSING	\N	TP	21	Kiara Materne	934
-1900	464	CL	CLARINET, B FLAT	XE54692	Good	\N	JUPITER	JCL710	CL	56	Lilla Vestergaard	928
-2102	103	TP	TRUMPET, B FLAT	H35099	Good	\N	BLESSING	\N	TP	23	Mikael Eshetu	935
-1533	546	FL	FLUTE	XD60579	Good	\N	JUPITER	JEL 710	FL	51	Nellie Odera	1081
-1918	458	CL	CLARINET, B FLAT	KE54751	Good	\N	JUPITER	JCL710	CL	50	Seung Hyun Nam	973
-2099	457	CL	CLARINET, B FLAT	KE54676	Good	\N	JUPITER	JCL710	CL	49	Theodore Wright	1070
-1894	596	SXA	SAXOPHONE, ALTO	XF54480	Good	\N	JUPITER	JAS 710	AX	30	Margaret Oganda	1078
-1899	628	SXA	SAXOPHONE, ALTO	AF53348	Good	\N	JUPITER	JAS 710	AX	59	Reuben Szuchman	848
-1915	621	SXA	SAXOPHONE, ALTO	YF57348	Good	\N	JUPITER	JAS 710	AX	52	Mark Anding	1076
-1923	617	SXA	SAXOPHONE, ALTO	XF56283	Good	\N	JUPITER	JAS 710	AX	48	Vanaaya Patel	304
-1924	616	SXA	SAXOPHONE, ALTO	XF57296	Good	\N	JUPITER	JAS 710	AX	47	Yonatan Wondim Belachew Andersen	952
-2100	594	SXA	SAXOPHONE, ALTO	XF54576	Good	\N	JUPITER	JAS 710	AX	29	Stefanie Landolt	239
-1531	623	SXA	SAXOPHONE, ALTO	YF57320	Good	\N	JUPITER	JAS 710	AX	54	Nirvi Joymungul	984
-1550	624	SXA	SAXOPHONE, ALTO	XF54149	Good	\N	JUPITER	JAS 710	AX	55	Gakenia Mucharie	1075
-1895	384	GRE	GUITAR, ELECTRIC	116108578	Good	\N	FENDER	CD-60CE Mahogany	\N	31	Angel Gray	\N
-1561	567	SXA	SAXOPHONE, ALTO	11120072	Good	INSTRUMENT STORE	ETUDE	\N	AX	2	\N	\N
-1562	646	SXT	SAXOPHONE, TENOR	227671	Good	INSTRUMENT STORE	BUSCHER	\N	TX	2	\N	\N
-1564	389	GRT	GUITAR, HALF	10	Good	\N	KAY	\N	\N	5	\N	\N
-1567	285	SR	SNARE	6276793	Good	MS MUSIC	LUDWIG	\N	\N	1	\N	\N
-1568	295	TML	TIMBALI	3112778	Good	MS MUSIC	LUDWIG	\N	\N	1	\N	\N
-1569	257	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	7	\N	\N
-1571	275	SRM	SNARE, MARCHING	1P-3099	Good	MS MUSIC	YAMAHA	MS 9014	\N	2	\N	\N
-1572	278	SRM	SNARE, MARCHING	1P-3076	Good	MS MUSIC	YAMAHA	MS 9014	\N	5	\N	\N
-1574	288	SR	SNARE	NIL	Good	INSTRUMENT STORE	YAMAHA	\N	\N	26	\N	\N
-1560	143	TP	TRUMPET, B FLAT	XA02614	Good	INSTRUMENT STORE	JUPITER	\N	TP	54	\N	\N
-1563	153	TP	TRUMPET, B FLAT	BA09444	Good	INSTRUMENT STORE	JUPITER	\N	TP	64	\N	\N
-1573	3	BH	BARITONE/EUPHONIUM	839431	Good	\N	AMATI KRASLICE	\N	BH	4	\N	\N
-1575	510	FL	FLUTE	K98713	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	17	\N	\N
-1576	512	FL	FLUTE	2SP-K99109	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	18	\N	\N
-1577	514	FL	FLUTE	P11203	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	19	\N	\N
-1640	587	SXA	SAXOPHONE, ALTO	11110740	Good	INSTRUMENT STORE	ETUDE	\N	AX	22	\N	\N
-1641	386	GRT	GUITAR, HALF	7	Good	\N	KAY	\N	\N	2	\N	\N
-1644	600	SXA	SAXOPHONE, ALTO	XF54574	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	32	\N	\N
-1648	603	SXA	SAXOPHONE, ALTO	XF54336	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	34	\N	\N
-1650	581	SXA	SAXOPHONE, ALTO	362477A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	16	\N	\N
-1646	74	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	42	\N	\N
-1649	42	TNTP	TROMBONE, TENOR - PLASTIC	PB17070395	Good	\N	TROMBA	Pro	PTB	10	\N	\N
-1639	517	FL	FLUTE	28411021	Good	INSTRUMENT STORE	PRELUDE	\N	FL	22	\N	\N
-1642	439	CL	CLARINET, B FLAT	11299276	Good	INSTRUMENT STORE	ETUDE	\N	CL	31	\N	\N
-1643	527	FL	FLUTE	D1206485	Good	INSTRUMENT STORE	ETUDE	\N	FL	32	\N	\N
-1645	528	FL	FLUTE	D1206556	Good	INSTRUMENT STORE	ETUDE	\N	FL	33	\N	\N
-1647	529	FL	FLUTE	206295	Good	INSTRUMENT STORE	ETUDE	\N	FL	34	\N	\N
-1651	116	TP	TRUMPET, B FLAT	756323	Good	INSTRUMENT STORE	YAMAHA	\N	TP	35	\N	\N
-1652	530	FL	FLUTE	206261	Good	INSTRUMENT STORE	ETUDE	\N	FL	35	\N	\N
-1653	531	FL	FLUTE	K96124	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	36	\N	\N
-1654	533	FL	FLUTE	WD57818	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	38	\N	\N
-1656	447	CL	CLARINET, B FLAT	1209178	Good	INSTRUMENT STORE	ETUDE	\N	CL	39	\N	\N
-2053	114	TP	TRUMPET, B FLAT	511564	Good	\N	YAMAHA	\N	TP	34	Aiden D'Souza	944
-2047	132	TP	TRUMPET, B FLAT	WA26516	Good	\N	JUPITER	\N	TP	43	Anaiya Khubchandani	947
-2045	473	CL	CLARINET, B FLAT	YE67756	Good	\N	JUPITER	JCL710	CL	65	Gaia Bonde-Nielsen	940
-1970	92	TP	TRUMPET, B FLAT	678970	Good	\N	YAMAHA	YTR 2335	TP	12	Ignacio Biafore	936
-2051	536	FL	FLUTE	WD62303	Good	\N	JUPITER	JEL 710	FL	41	Julian Dibling	939
-2006	144	TP	TRUMPET, B FLAT	488350	Good	\N	BACH	\N	TP	55	Kaisei Stephens	932
-1996	113	TP	TRUMPET, B FLAT	F19277	Good	\N	BLESSING	\N	TP	33	Kush Tanna	941
-2049	534	FL	FLUTE	WD62211	Good	\N	JUPITER	JEL 710	FL	39	Leo Cutler	267
-1995	100	TP	TRUMPET, B FLAT	H31438	Good	\N	BLESSING	\N	TP	20	Maria Agenorwot	847
-1997	538	FL	FLUTE	WD62183	Good	\N	JUPITER	JEL 710	FL	43	Mark Anding	1076
-1983	57	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	KAIZER	\N	PTB	25	Mark Anding	1076
-1991	664	SXT	SAXOPHONE, TENOR	CF07952	Good	\N	JUPITER	JTS700	TX	20	Mark Anding	1076
-2042	654	SXT	SAXOPHONE, TENOR	063739A	Good	\N	YAMAHA	\N	TX	10	Finlay Haswell	951
-2048	662	SXT	SAXOPHONE, TENOR	YF06601	Good	\N	JUPITER	JTS710	TX	18	Gunnar Purdy	27
-2052	660	SXT	SAXOPHONE, TENOR	3847	Good	\N	JUPITER	\N	TX	16	Adam Kone	755
-2031	26	TN	TROMBONE, TENOR	406896	Good	\N	YAMAHA	\N	TB	12	Marco De Vries Aguirre	502
-2041	18	TN	TROMBONE, TENOR	406948	Good	\N	YAMAHA	\N	TB	4	Arhum Bid	240
-2028	482	CLB	CLARINET, BASS	YE 69248	Good	\N	YAMAHA	Hex 1000	BCL	4	Gwendolyn Anding	1077
-1632	396	VN	VIOLIN	J052107087	Good	HS MUSIC	HOFNER	\N	\N	1	\N	\N
-2072	445	CL	CLARINET, B FLAT	J65342	Good	INSTRUMENT STORE	YAMAHA	\N	CL	37	\N	\N
-2067	88	TP	TRUMPET, B FLAT	806725	Good	\N	YAMAHA	YTR 2335	TP	8	Arjan Arora	360
-2093	83	TP	TRUMPET, B FLAT	533719	Good	\N	YAMAHA	\N	TP	3	Evan Daines	954
-2088	230	BD	BASS DRUM	PO-1575	Good	MS MUSIC	YAMAHA	CB628	\N	2	\N	\N
-2095	86	TP	TRUMPET, B FLAT	556107	Good	\N	YAMAHA	YTR 2335	TP	6	Holly Mcmurtry	955
-2094	440	CL	CLARINET, B FLAT	J65438	Good	\N	YAMAHA	\N	CL	32	Io Verstraete	792
-2092	435	CL	CLARINET, B FLAT	074011A	Good	\N	YAMAHA	\N	CL	27	Leo Prawitz	511
-2113	618	SXA	SAXOPHONE, ALTO	XF56319	Good	\N	JUPITER	JAS 710	AX	49	Barney Carver Wildig	612
-2114	461	CL	CLARINET, B FLAT	XE54957	Good	\N	JUPITER	JCL710	CL	53	Mahdiyah Muneeb	977
-1731	371	GRC	GUITAR, CLASSICAL	\N	Good	INSTRUMENT STORE	PARADISE	17	\N	17	\N	\N
-1751	283	BLS	BELLS, SLEIGH	\N	Good	HS MUSIC	WEISS	\N	\N	1	\N	\N
-2071	430	CL	CLARINET, B FLAT	J07292	Good	\N	YAMAHA	\N	CL	22	Kevin Keene	\N
-2117	540	FL	FLUTE	XD58187	Good	\N	JUPITER	JEL 710	FL	45	Saptha Girish Bommadevara	332
-2116	2	BH	BARITONE/EUPHONIUM	770765	Good	\N	BESSON	Soveriegn 968	BH	3	Saqer Alnaqbi	942
-2115	548	FL	FLUTE	YD66080	Good	\N	JUPITER	JEL 710	FL	54	Seya Chandaria	926
-2118	570	SXA	SAXOPHONE, ALTO	11110173	Good	\N	ETUDE	\N	AX	5	Lukas Norman	419
-2121	649	SXT	SAXOPHONE, TENOR	31870	Good	\N	YAMAHA	\N	TX	5	Spencer Schenck	924
-2122	21	TN	TROMBONE, TENOR	325472	Good	\N	YAMAHA	\N	TB	7	Maartje Stott	114
-2074	16	TN	TROMBONE, TENOR	406538	Good	\N	YAMAHA	\N	TB	2	Anne Bamlango	359
-2119	643	SXB	SAXOPHONE, BARITONE	AF03351	Good	\N	JUPITER	JBS 1000	BX	4	Lukas Norman	419
-2068	196	PE	PIANO, ELECTRIC	\N	Good	DANCE STUDIO	YAMAHA	\N	\N	8	\N	\N
-2069	185	KB	KEYBOARD	913094	Good	\N	YAMAHA	PSR 220	\N	21	\N	\N
-2070	186	KB	KEYBOARD	13143	Good	\N	YAMAHA	PSR 83	\N	22	\N	\N
-2077	345	GRB	GUITAR, BASS	\N	Good	MS MUSIC	YAMAHA	BB1000	\N	2	\N	\N
-2078	219	\N	PEDAL, SUSTAIN	\N	Good	HS MUSIC	YAMAHA	FC4	\N	7	\N	\N
-2080	316	BL	BELL SET	\N	Good	HS MUSIC	YAMAHA	\N	\N	5	\N	\N
-2089	377	GRC	GUITAR, CLASSICAL	\N	Good	\N	YAMAHA	40	\N	29	Keeara Walji	\N
-2075	365	GRC	GUITAR, CLASSICAL	HKP064005	Good	\N	YAMAHA	40	\N	9	Finola Doherty	\N
-2076	367	GRC	GUITAR, CLASSICAL	HKP054553	Good	\N	YAMAHA	40	\N	11	Marwa Baker	\N
-1898	91	TP	TRUMPET, B FLAT	554189	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	11	\N	\N
-1907	161	TB	TUBA	106508	Good	MS MUSIC	YAMAHA	\N	T	1	\N	\N
-2062	265	DK	DRUMSET	SBB2217	Good	HS MUSIC	YAMAHA	\N	\N	4	\N	\N
-1668	214	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	14	\N	\N
-1669	425	CL	CLARINET, B FLAT	443788	Good	INSTRUMENT STORE	YAMAHA	\N	CL	17	\N	\N
-1672	360	GRC	GUITAR, CLASSICAL	HKP064875	Good	\N	YAMAHA	40	\N	4	Jihong Joo	525
-1670	635	SXA	SAXOPHONE, ALTO	CF57209	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	66	\N	\N
-1673	17	TN	TROMBONE, TENOR	336151	Good	INSTRUMENT STORE	YAMAHA	\N	TB	3	\N	\N
-1671	364	GRC	GUITAR, CLASSICAL	HKP064163	Good	MS MUSIC	YAMAHA	40	\N	8	\N	\N
-2110	551	FL	FLUTE	YD65954	Good	\N	JUPITER	JEL 710	FL	57	Anaiya Shah	356
-2111	99	TP	TRUMPET, B FLAT	H35203	Good	\N	BLESSING	BTR 1270	TP	19	Cahir Patel	117
-2112	124	TP	TRUMPET, B FLAT	1107571	Good	\N	LIBRETTO	\N	TP	39	Caleb Ross	961
-2103	106	TP	TRUMPET, B FLAT	H31450	Good	\N	BLESSING	BIR 1270	TP	26	Saqer Alnaqbi	942
-2107	469	CL	CLARINET, B FLAT	YE67254	Good	\N	JUPITER	JCL710	CL	61	Vilma Doret Rosen	59
-2106	629	SXA	SAXOPHONE, ALTO	AF53502	Good	\N	JUPITER	JAS 710	AX	60	Noga Hercberg	661
-2108	592	SXA	SAXOPHONE, ALTO	XF54339	Good	\N	JUPITER	JAS 710	AX	27	Alexander Roe	36
-2104	64	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	PBONE	\N	PTB	32	Seth Lundell	982
-2105	66	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	PBONE	\N	PTB	34	Sadie Szuchman	846
-2109	344	GRB	GUITAR, BASS	\N	Good	\N	ARCHER	\N	\N	1	Jana Landolt	302
+COPY public.instruments (id, legacy_number, code, description, serial, state, location, make, model, legacy_code, number, user_name, user_id, issued_on) FROM stdin;
+1734	216	\N	STAND, GUITAR	\N	Good	HS MUSIC	UNKNOWN	\N	\N	1	\N	\N	\N
+1774	589	SXA	SAXOPHONE, ALTO	11110739	Good	INSTRUMENT STORE	ETUDE	\N	AX	24	\N	\N	\N
+1773	519	FL	FLUTE	28411028	Good	INSTRUMENT STORE	PRELUDE	\N	FL	24	\N	\N	\N
+1791	302	TBN	TUBANOS	\N	Good	MS MUSIC	REMO	14 inch	\N	4	\N	\N	\N
+1804	566	SXA	SAXOPHONE, ALTO	11120071	Good	INSTRUMENT STORE	ETUDE	\N	AX	1	\N	\N	\N
+1811	287	SR	SNARE	\N	Good	MS MUSIC	PEARL	\N	\N	3	\N	\N	\N
+1813	207	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	7	\N	\N	\N
+1821	631	SXA	SAXOPHONE, ALTO	BF54273	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	62	\N	\N	\N
+1829	626	SXA	SAXOPHONE, ALTO	AF53354	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	57	\N	\N	\N
+1832	627	SXA	SAXOPHONE, ALTO	AF53345	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	58	\N	\N	\N
+1835	630	SXA	SAXOPHONE, ALTO	BF54625	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	61	\N	\N	\N
+1837	637	SXA	SAXOPHONE, ALTO	CF57292	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	68	\N	\N	\N
+1838	638	SXA	SAXOPHONE, ALTO	CF57202	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	69	\N	\N	\N
+1839	639	SXA	SAXOPHONE, ALTO	CF56658	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	70	\N	\N	\N
+1782	78	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	46	\N	\N	\N
+1784	79	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	47	\N	\N	\N
+1789	80	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	48	\N	\N	\N
+1792	56	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	24	\N	\N	\N
+1793	36	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	4	\N	\N	\N
+1799	37	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	5	\N	\N	\N
+1801	33	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	1	\N	\N	\N
+1807	653	SXT	SAXOPHONE, TENOR	N495304	Good	INSTRUMENT STORE	SELMER	\N	TX	9	\N	\N	\N
+1840	238	CLV	CLAVES	\N	Good	MS MUSIC	LP	GRENADILLA	\N	2	\N	\N	\N
+1841	251	CWB	COWBELL	\N	Good	MS MUSIC	LP	Black Beauty	\N	2	\N	\N	\N
+1808	657	SXT	SAXOPHONE, TENOR	TS10050022	Good	INSTRUMENT STORE	BUNDY	\N	TX	13	\N	\N	\N
+1781	525	FL	FLUTE	D1206510	Good	INSTRUMENT STORE	ETUDE	\N	FL	30	\N	\N	\N
+1815	647	SXT	SAXOPHONE, TENOR	31840	Good	INSTRUMENT STORE	YAMAHA	\N	TX	3	\N	\N	\N
+1775	25	TN	TROMBONE, TENOR	452363	Good	INSTRUMENT STORE	BLESSING	\N	TB	11	\N	\N	\N
+1776	27	TN	TROMBONE, TENOR	9120158	Good	INSTRUMENT STORE	ETUDE	\N	TB	13	\N	\N	\N
+1777	28	TN	TROMBONE, TENOR	9120243	Good	INSTRUMENT STORE	ETUDE	\N	TB	14	\N	\N	\N
+1783	159	TP	TRUMPET, B FLAT	CAS15598	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	70	\N	\N	\N
+1794	490	FL	FLUTE	2922376	Good	INSTRUMENT STORE	WT.AMSTRONG	104	FL	7	\N	\N	\N
+1796	13	M	MELLOPHONE	L02630	Good	INSTRUMENT STORE	JUPITER	\N	M	1	\N	\N	\N
+1802	562	OB	OBOE	B33327	Good	INSTRUMENT STORE	BUNDY	\N	OB	1	\N	\N	\N
+1803	564	PC	PICCOLO	11010007	Good	INSTRUMENT STORE	BUNDY	\N	PC	1	\N	\N	\N
+1778	29	TN	TROMBONE, TENOR	9120157	Good	INSTRUMENT STORE	ETUDE	\N	TB	15	\N	\N	\N
+1779	30	TN	TROMBONE, TENOR	1107197	Good	INSTRUMENT STORE	ALLORA	\N	TB	16	\N	\N	\N
+1780	31	TN	TROMBONE, TENOR	1107273	Good	INSTRUMENT STORE	ALLORA	\N	TB	17	\N	\N	\N
+1735	226	BLT	BELLS, TUBULAR	\N	Good	HS MUSIC	ROSS	\N	\N	1	\N	\N	\N
+1909	582	SXA	SAXOPHONE, ALTO	388666A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	17	\N	\N	\N
+1910	583	SXA	SAXOPHONE, ALTO	T14584	Good	INSTRUMENT STORE	YAMAHA	YAS 23	AX	18	\N	\N	\N
+1845	293	TR	TAMBOURINE	\N	Good	MS MUSIC	REMO	Fiberskyn 3 black	\N	2	\N	\N	\N
+1846	199	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 2	EAVESTAFF	\N	\N	2	\N	\N	\N
+1847	200	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 3	SPENCER	\N	\N	3	\N	\N	\N
+1849	272	Q	QUAD, MARCHING	202902	Good	MS MUSIC	PEARL	Black	\N	1	\N	\N	\N
+1850	385	GRT	GUITAR, HALF	11	Good	\N	KAY	\N	\N	1	\N	\N	\N
+1851	387	GRT	GUITAR, HALF	9	Good	PRACTICE ROOM 3	KAY	\N	\N	3	\N	\N	\N
+1852	267	EGS	EGG SHAKERS	\N	Good	MS MUSIC	LP	Black 2 pr	\N	2	\N	\N	\N
+1853	271	MRC	MARACAS	\N	Good	MS MUSIC	LP	Pro Yellow Light Handle	\N	2	\N	\N	\N
+1854	210	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	10	\N	\N	\N
+1855	211	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	11	\N	\N	\N
+2029	574	SXA	SAXOPHONE, ALTO	348075	Good	\N	YAMAHA	\N	AX	9	Mwende Mittelstadt	192	\N
+1927	579	SXA	SAXOPHONE, ALTO	290365	Good	INSTRUMENT STORE	YAMAHA	\N	AX	14	\N	\N	\N
+1858	306	WB	WOOD BLOCK	\N	Good	HS MUSIC	BLACK SWAMP	BLA-MWB1	\N	1	\N	\N	\N
+1812	206	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	6	\N	\N	\N
+1859	166	AM	AMPLIFIER	72168	Good	MS MUSIC	GALLEN-K	\N	\N	2	\N	\N	\N
+1860	317	CMS	CYMBAL, SUSPENDED 18 INCH	AD 69101 046	Good	HS MUSIC	ZILDJIAN	Orchestral Selection ZIL-A0419	\N	1	\N	\N	\N
+1862	348	GRB	GUITAR, BASS	CGF1307326	Good	DRUM ROOM 1	FENDER	\N	\N	5	\N	\N	\N
+1863	388	GRT	GUITAR, HALF	4	Good	PRACTICE ROOM 3	KAY	\N	\N	4	\N	\N	\N
+1864	168	AMB	AMPLIFIER, BASS	M 1053205	Good	DRUM ROOM 1	FENDER	BASSMAN	\N	4	\N	\N	\N
+1866	393	GRT	GUITAR, HALF	8	Good	\N	KAY	\N	\N	9	\N	\N	\N
+1867	247	CG	CONGA	ISK 3120157238	Good	MS MUSIC	LATIN PERCUSSION	12 inch	\N	4	\N	\N	\N
+1868	248	CG	CONGA	ISK 23 JAN 02	Good	MS MUSIC	LATIN PERCUSSION	14 Inch	\N	5	\N	\N	\N
+1869	244	CG	CONGA	ISK 3120138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	3	\N	\N	\N
+1870	249	CG	CONGA	ISK 312138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	6	\N	\N	\N
+1871	250	CG	CONGA	ISK 312120138881	Good	MS MUSIC	LATIN PERCUSSION	10 Inch	\N	7	\N	\N	\N
+1865	46	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	MS MUSIC	TROMBA	Pro	PTB	14	\N	\N	\N
+1875	183	KB	KEYBOARD	AH24202	Good	\N	ROLAND	813	\N	1	\N	\N	\N
+1883	264	DK	DRUMSET	\N	Good	MS MUSIC	PEARL	Vision	\N	3	\N	\N	\N
+1884	325	SR	SNARE	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	4	\N	\N	\N
+1887	205	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	5	\N	\N	\N
+1888	274	SRM	SNARE, MARCHING	1P-3095	Good	MS MUSIC	YAMAHA	MS 9014	\N	1	\N	\N	\N
+1993	665	SXT	SAXOPHONE, TENOR	CF07553	Good	INSTRUMENT STORE	JUPITER	JTS700	TX	21	\N	\N	\N
+1890	22	TN	TROMBONE, TENOR	320963	Good	MS MUSIC	YAMAHA	\N	TB	8	\N	\N	\N
+1881	39	TNAP	TROMBONE, ALTO - PLASTIC	BM17120413	Good	INSTRUMENT STORE	PBONE	Mini	PTB	7	\N	\N	\N
+1882	41	TNAP	TROMBONE, ALTO - PLASTIC	BM17120388	Good	INSTRUMENT STORE	PBONE	Mini	PTB	9	\N	\N	\N
+1889	164	SSP	SOUSAPHONE	910530	Good	MS MUSIC	YAMAHA	\N	T	1	\N	\N	\N
+1912	241	SRC	SNARE, CONCERT	\N	Good	HS MUSIC	BLACK SWAMP	BLA-CM514BL	\N	1	\N	\N	\N
+1913	297	TPT	TIMPANI, 23 INCH	52479	Good	HS MUSIC	LUDWIG	LKS423FG	\N	6	\N	\N	\N
+1914	282	\N	SHIELD	\N	Good	HS MUSIC	GIBRALTAR	GIB-GDS-5	\N	1	\N	\N	\N
+1917	280	PK	PRACTICE KIT	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	1	\N	\N	\N
+1919	261	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	6	\N	\N	\N
+1920	259	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	4	\N	\N	\N
+1921	224	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	3	\N	\N	\N
+1805	417	CL	CLARINET, B FLAT	989832	Good	INSTRUMENT STORE	BUNDY	\N	CL	9	\N	\N	\N
+1810	107	TP	TRUMPET, B FLAT	H34971	Good	INSTRUMENT STORE	BLESSING	\N	TP	27	\N	\N	\N
+1816	413	CL	CLARINET, B FLAT	7943	Good	INSTRUMENT STORE	YAMAHA	\N	CL	6	\N	\N	\N
+1817	432	CL	CLARINET, B FLAT	444451	Good	INSTRUMENT STORE	YAMAHA	\N	CL	24	\N	\N	\N
+1820	556	FL	FLUTE	BD62736	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	62	\N	\N	\N
+1822	471	CL	CLARINET, B FLAT	YE67775	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	63	\N	\N	\N
+1823	472	CL	CLARINET, B FLAT	YE67468	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	64	\N	\N	\N
+1824	476	CL	CLARINET, B FLAT	BE63558	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	68	\N	\N	\N
+1825	462	CL	CLARINET, B FLAT	XE50000	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	54	\N	\N	\N
+1826	549	FL	FLUTE	YD66218	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	55	\N	\N	\N
+1827	550	FL	FLUTE	YD66291	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	56	\N	\N	\N
+1828	465	CL	CLARINET, B FLAT	XE54699	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	57	\N	\N	\N
+1830	466	CL	CLARINET, B FLAT	XE54697	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	58	\N	\N	\N
+1831	552	FL	FLUTE	BD62678	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	58	\N	\N	\N
+1922	331	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	3	\N	\N	\N
+1834	554	FL	FLUTE	BD63433	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	60	\N	\N	\N
+1737	576	SXA	SAXOPHONE, ALTO	3468	Good	INSTRUMENT STORE	BLESSING	\N	AX	11	\N	\N	\N
+2098	62	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	30	\N	\N	\N
+1530	315	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	4	\N	\N	\N
+1886	204	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	4	\N	\N	\N
+1929	223	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	2	\N	\N	\N
+1930	330	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	2	\N	\N	\N
+1491	273	Q	QUAD, MARCHING	203143	Good	MS MUSIC	PEARL	Black	\N	2	\N	\N	\N
+1492	276	SRM	SNARE, MARCHING	\N	Good	MS MUSIC	VERVE	White	\N	3	\N	\N	\N
+1493	277	SRM	SNARE, MARCHING	\N	Good	MS MUSIC	VERVE	White	\N	4	\N	\N	\N
+1495	75	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	43	\N	\N	\N
+1497	76	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	44	\N	\N	\N
+1504	77	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	45	\N	\N	\N
+1506	48	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	16	\N	\N	\N
+1507	51	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	19	\N	\N	\N
+1980	52	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	20	\N	\N	\N
+1981	53	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	21	\N	\N	\N
+1932	333	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	5	\N	\N	\N
+1933	334	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	6	\N	\N	\N
+1934	335	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	7	\N	\N	\N
+1935	167	AMB	AMPLIFIER, BASS	ICTB15016929	Good	HS MUSIC	FENDER	Rumble 25	\N	3	\N	\N	\N
+1936	399	VN	VIOLIN	V2024618	Good	HS MUSIC	ANDREAS EASTMAN	\N	\N	4	\N	\N	\N
+1937	298	TPD	TIMPANI, 26 INCH	51734	Good	HS MUSIC	LUDWIG	SUD-LKS426FG	\N	2	\N	\N	\N
+1938	400	VN	VIOLIN	V2025159	Good	HS MUSIC	ANDREAS EASTMAN	\N	\N	5	\N	\N	\N
+1939	326	TPN	TIMPANI, 29 INCH	36346	Good	HS MUSIC	LUDWIG	\N	\N	5	\N	\N	\N
+1940	172	AMG	AMPLIFIER, GUITAR	ICTB1500267	Good	HS MUSIC	FENDER	Frontman 15G	\N	7	\N	\N	\N
+1941	232	\N	MOUNTING BRACKET, BELL TREE	\N	Good	HS MUSIC	TREEWORKS	TW-TRE52	\N	1	\N	\N	\N
+1942	327	TPW	TIMPANI, 32 INCH	36301	Good	HS MUSIC	LUDWIG	\N	\N	4	\N	\N	\N
+1944	222	RK	RAINSTICK	\N	Good	UPPER ES MUSIC	CUSTOM	\N	\N	1	\N	\N	\N
+1945	329	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	1	\N	\N	\N
+1947	165	AM	AMPLIFIER	M 1134340	Good	HS MUSIC	FENDER	\N	\N	1	\N	\N	\N
+1948	229	BD	BASS DRUM	3442181	Good	HS MUSIC	LUDWIG	\N	\N	1	\N	\N	\N
+1949	311	X	XYLOPHONE	\N	Good	HS MUSIC	DII	Decator	\N	18	\N	\N	\N
+1950	174	AMK	AMPLIFIER, KEYBOARD	ODB#1230169	Good	HS MUSIC	PEAVEY	\N	\N	9	\N	\N	\N
+1960	20	TN	TROMBONE, TENOR	071009A	Good	INSTRUMENT STORE	YAMAHA	\N	TB	6	\N	\N	\N
+1953	328	X	XYLOPHONE	660845710719	Good	HS MUSIC	UNKNOWN	\N	\N	19	\N	\N	\N
+1955	233	CBS	CABASA	\N	Good	HS MUSIC	LP	LP234A	\N	1	\N	\N	\N
+1956	268	GUR	GUIRO	\N	Good	HS MUSIC	LP	Super LP243	\N	1	\N	\N	\N
+1957	231	BLR	BELL TREE	\N	Good	HS MUSIC	TREEWORKS	TW-TRE35	\N	1	\N	\N	\N
+1958	270	MRC	MARACAS	\N	Good	HS MUSIC	WEISS	\N	\N	1	\N	\N	\N
+1961	300	TGL	TRIANGLE	\N	Good	HS MUSIC	ALAN ABEL	6" Inch Symphonic	\N	1	\N	\N	\N
+1962	236	CLV	CLAVES	\N	Good	HS MUSIC	LP	GRENADILLA	\N	3	\N	\N	\N
+1963	368	GRC	GUITAR, CLASSICAL	HKPO64008	Good	MS MUSIC	YAMAHA	40	\N	12	\N	\N	\N
+1964	369	GRC	GUITAR, CLASSICAL	HKP054554	Good	MS MUSIC	YAMAHA	40	\N	13	\N	\N	\N
+1733	611	SXA	SAXOPHONE, ALTO	XF53790	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	42	\N	\N	\N
+1926	169	AMB	AMPLIFIER, BASS	AX78271	Good	INSTRUMENT STORE	ROLAND	CUBE-100	\N	5	\N	\N	\N
+1928	227	VS	VIBRASLAP	\N	Good	INSTRUMENT STORE	WEISS	SW-VIBRA	\N	1	\N	\N	\N
+1971	220	CWB	COWBELL	\N	Good	INSTRUMENT STORE	LP	Black Beauty	\N	1	\N	\N	\N
+1954	179	\N	MICROPHONE	\N	Good	INSTRUMENT STORE	SHURE	SM58	\N	1	\N	\N	\N
+1972	337	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	9	\N	\N	\N
+1973	338	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	10	\N	\N	\N
+1974	339	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	11	\N	\N	\N
+1975	340	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	12	\N	\N	\N
+1976	341	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	13	\N	\N	\N
+1977	342	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	14	\N	\N	\N
+1978	171	AMB	AMPLIFIER, BASS	OJBHE2300098	Good	HS MUSIC	PEAVEY	TKO-230EU	\N	11	\N	\N	\N
+1979	343	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	15	\N	\N	\N
+1836	470	CL	CLARINET, B FLAT	YE67470	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	62	\N	\N	\N
+1843	146	TP	TRUMPET, B FLAT	XA04125	Good	INSTRUMENT STORE	JUPITER	\N	TP	57	\N	\N	\N
+2073	446	CL	CLARINET, B FLAT	J65493	Good	\N	YAMAHA	\N	CL	38	Vashnie Joymungul	1032	\N
+1946	336	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	8	\N	\N	\N
+1984	307	WB	WOOD BLOCK	\N	Good	MS MUSIC	LP	PLASTIC RED	\N	2	\N	\N	\N
+1985	380	GRE	GUITAR, ELECTRIC	115085004	Good	HS MUSIC	FENDER	CD-60CE Mahogany	\N	26	\N	\N	\N
+1986	308	WB	WOOD BLOCK	\N	Good	MS MUSIC	LP	PLASTIC BLUE	\N	3	\N	\N	\N
+1987	269	GUR	GUIRO	\N	Good	MS MUSIC	LP	Plastic	\N	2	\N	\N	\N
+1988	310	X	XYLOPHONE	587	Good	MS MUSIC	ROSS	410	\N	17	\N	\N	\N
+1992	373	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	PARADISE	19	\N	19	\N	\N	\N
+1998	390	GRT	GUITAR, HALF	3	Good	PRACTICE ROOM 3	KAY	\N	\N	6	\N	\N	\N
+2000	382	GRE	GUITAR, ELECTRIC	115085034	Good	\N	FENDER	CD-60CE Mahogany	\N	25	\N	\N	\N
+2001	266	DKE	DRUMSET, ELECTRIC	694318011177	Good	DRUM ROOM 2	ALESIS	DM8	\N	5	\N	\N	\N
+2026	578	SXA	SAXOPHONE, ALTO	352128A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	13	\N	\N	\N
+2003	197	PG	PIANO, GRAND	302697	Good	PIANO ROOM	GEBR. PERZINO	GBT 175	\N	1	\N	\N	\N
+2004	198	PU	PIANO, UPRIGHT	\N	Good	PRACTICE ROOM 1	ELSENBERG	\N	\N	1	\N	\N	\N
+2005	391	GRT	GUITAR, HALF	1	Good	PRACTICE ROOM 3	KAY	\N	\N	7	\N	\N	\N
+2007	392	GRT	GUITAR, HALF	12	Good	PRACTICE ROOM 3	KAY	\N	\N	8	\N	\N	\N
+2008	395	GRT	GUITAR, HALF	6	Good	PRACTICE ROOM 3	KAY	\N	\N	11	\N	\N	\N
+2009	228	AGG	AGOGO BELL	\N	Good	MS MUSIC	LP	577 Dry	\N	1	\N	\N	\N
+2010	292	TR	TAMBOURINE	\N	Good	MS MUSIC	MEINL	Open face	\N	1	\N	\N	\N
+2011	323	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	6	\N	\N	\N
+2012	318	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	1	\N	\N	\N
+2013	284	BLS	BELLS, SLEIGH	\N	Good	MS MUSIC	LUDWIG	Red Handle	\N	2	\N	\N	\N
+2015	218	\N	STAND, MUSIC	\N	Good	MS MUSIC	GMS	\N	\N	2	\N	\N	\N
+2017	301	TGL	TRIANGLE	\N	Good	MS MUSIC	ALAN ABEL	6 inch	\N	2	\N	\N	\N
+2018	234	CBS	CABASA	\N	Good	MS MUSIC	LP	Small	\N	2	\N	\N	\N
+2019	202	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	2	\N	\N	\N
+2020	237	CLV	CLAVES	\N	Good	MS MUSIC	KING	\N	\N	1	\N	\N	\N
+2021	376	GRC	GUITAR, CLASSICAL	265931HRJ	Good	INSTRUMENT STORE	YAMAHA	40	\N	28	\N	\N	\N
+1982	58	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	HS MUSIC	KAIZER	\N	PTB	26	\N	\N	\N
+2023	362	GRC	GUITAR, CLASSICAL	HKPO065675	Good	MS MUSIC	YAMAHA	40	\N	6	\N	\N	\N
+2002	15	TN	TROMBONE, TENOR	970406	Good	MS MUSIC	HOLTON	TR259	TB	1	\N	\N	\N
+2030	191	PE	PIANO, ELECTRIC	YCQM01249	Good	MS MUSIC	YAMAHA	CAP 320	\N	4	\N	\N	\N
+2027	19	TN	TROMBONE, TENOR	334792	Good	INSTRUMENT STORE	YAMAHA	\N	TB	5	\N	\N	\N
+2033	481	CLB	CLARINET, BASS	43084	Good	INSTRUMENT STORE	YAMAHA	\N	BCL	3	\N	\N	\N
+2035	190	PE	PIANO, ELECTRIC	7163	Good	MUSIC OFFICE	YAMAHA	CVP 87A	\N	3	\N	\N	\N
+2036	366	GRC	GUITAR, CLASSICAL	HKP064183	Good	MS MUSIC	YAMAHA	40	\N	10	\N	\N	\N
+2037	357	GRC	GUITAR, CLASSICAL	HKZ107832	Good	\N	YAMAHA	40	\N	1	\N	\N	\N
+2038	358	GRC	GUITAR, CLASSICAL	HKZ034412	Good	MS MUSIC	YAMAHA	40	\N	2	\N	\N	\N
+2039	359	GRC	GUITAR, CLASSICAL	HKP065151	Good	MS MUSIC	YAMAHA	40	\N	3	\N	\N	\N
+1857	81	TP	TRUMPET, B FLAT	808845	Good	INSTRUMENT STORE	YAMAHA	\N	TP	1	\N	\N	\N
+1874	415	CL	CLARINET, B FLAT	B 859866/7112-STORE	Good	\N	VITO	\N	CL	7	\N	\N	\N
+1893	488	FL	FLUTE	452046A	Good	MS MUSIC	YAMAHA	\N	FL	5	\N	\N	\N
+1896	89	TP	TRUMPET, B FLAT	556519	Good	INSTRUMENT STORE	YAMAHA	\N	TP	9	\N	\N	\N
+1897	532	FL	FLUTE	AP28041129	Good	\N	PRELUDE	\N	FL	37	\N	\N	\N
+1903	95	TP	TRUMPET, B FLAT	634070	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	15	\N	\N	\N
+1904	110	TP	TRUMPET, B FLAT	501720	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	30	\N	\N	\N
+1911	428	CL	CLARINET, B FLAT	J65540	Good	INSTRUMENT STORE	YAMAHA	\N	CL	20	\N	\N	\N
+1916	112	TP	TRUMPET, B FLAT	638850	Good	MS MUSIC	YAMAHA	YTR 2335	TP	32	\N	\N	\N
+1736	416	CL	CLARINET, B FLAT	504869	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	8	\N	\N	\N
+1498	97	TP	TRUMPET, B FLAT	S-756323	Good	INSTRUMENT STORE	CONN	\N	TP	17	\N	\N	\N
+1499	98	TP	TRUMPET, B FLAT	H35537	Good	INSTRUMENT STORE	BLESSING	BTR 1270	TP	18	\N	\N	\N
+1500	102	TP	TRUMPET, B FLAT	H34929	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	22	\N	\N	\N
+1501	104	TP	TRUMPET, B FLAT	H32053	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	24	\N	\N	\N
+1502	105	TP	TRUMPET, B FLAT	H31491	Good	INSTRUMENT STORE	BLESSING	BIR 1270	TP	25	\N	\N	\N
+1503	108	TP	TRUMPET, B FLAT	F24304	Good	INSTRUMENT STORE	BLESSING	\N	TP	28	\N	\N	\N
+1505	133	TP	TRUMPET, B FLAT	XA07789	Good	INSTRUMENT STORE	JUPITER	\N	TP	44	\N	\N	\N
+2014	279	TTM	TOM, MARCHING	6 PAIRS	Good	INSTRUMENT STORE	PEARL	\N	\N	1	\N	\N	\N
+2016	305	WC	WIND CHIMES	\N	Good	INSTRUMENT STORE	LP	LP236D	\N	1	\N	\N	\N
+2055	49	TNTP	TROMBONE, TENOR - PLASTIC	PR18100094	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	17	\N	\N	\N
+1785	557	FL	FLUTE	DD58225	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	63	\N	\N	\N
+2040	421	CL	CLARINET, B FLAT	27303	Good	INSTRUMENT STORE	YAMAHA	\N	CL	13	\N	\N	\N
+2120	409	CL	CLARINET, B FLAT	7988	Good	MS MUSIC	YAMAHA	\N	CL	4	\N	\N	\N
+1755	441	CL	CLARINET, B FLAT	J65382	Good	MS MUSIC	YAMAHA	\N	CL	33	\N	\N	\N
+1951	429	CL	CLARINET, B FLAT	J65851	Good	INSTRUMENT STORE	YAMAHA	\N	CL	21	\N	\N	\N
+1952	442	CL	CLARINET, B FLAT	J65593	Good	INSTRUMENT STORE	YAMAHA	\N	CL	34	\N	\N	\N
+1959	443	CL	CLARINET, B FLAT	J65299	Good	INSTRUMENT STORE	YAMAHA	\N	CL	35	\N	\N	\N
+1965	499	FL	FLUTE	617224	Good	INSTRUMENT STORE	YAMAHA	\N	FL	11	\N	\N	\N
+2096	580	SXA	SAXOPHONE, ALTO	362547A	Good	\N	YAMAHA	\N	AX	15	Caitlin Wood	160	\N
+1764	575	SXA	SAXOPHONE, ALTO	387824A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	10	\N	\N	\N
+1766	636	SXA	SAXOPHONE, ALTO	CF57086	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	67	\N	\N	\N
+1966	420	CL	CLARINET, B FLAT	7980	Good	INSTRUMENT STORE	YAMAHA	\N	CL	12	\N	\N	\N
+1967	434	CL	CLARINET, B FLAT	B88822	Good	INSTRUMENT STORE	YAMAHA	\N	CL	26	\N	\N	\N
+1968	405	CL	CLARINET, B FLAT	206603A	Good	INSTRUMENT STORE	YAMAHA	\N	CL	2	\N	\N	\N
+1969	485	FL	FLUTE	826706	Good	INSTRUMENT STORE	YAMAHA	222	FL	2	\N	\N	\N
+2022	6	BH	BARITONE/EUPHONIUM	534386	Good	INSTRUMENT STORE	YAMAHA	\N	BH	7	\N	\N	\N
+2024	403	CL	CLARINET, B FLAT	206681A	Good	INSTRUMENT STORE	YAMAHA	\N	CL	1	\N	\N	\N
+2025	484	FL	FLUTE	609368	Good	INSTRUMENT STORE	YAMAHA	\N	FL	1	\N	\N	\N
+1494	506	FL	FLUTE	K96338	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	15	\N	\N	\N
+2032	407	CL	CLARINET, B FLAT	7291	Good	INSTRUMENT STORE	YAMAHA	\N	CL	3	\N	\N	\N
+1739	431	CL	CLARINET, B FLAT	193026A	Good	\N	YAMAHA	\N	CL	23	Fatuma Tall	301	\N
+1768	489	FL	FLUTE	42684	Good	INSTRUMENT STORE	EMERSON	EF1	FL	6	\N	\N	\N
+1742	422	CL	CLARINET, B FLAT	206167	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	14	\N	\N	\N
+1763	492	FL	FLUTE	650122	Good	INSTRUMENT STORE	YAMAHA	\N	FL	8	\N	\N	\N
+1765	475	CL	CLARINET, B FLAT	BE63660	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	67	\N	\N	\N
+1767	502	FL	FLUTE	K96367	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	13	\N	\N	\N
+1770	518	FL	FLUTE	33111112	Good	INSTRUMENT STORE	PRELUDE	\N	FL	23	\N	\N	\N
+1786	122	TP	TRUMPET, B FLAT	124911	Good	\N	ETUDE	\N	TP	38	Mark Anding	1076	\N
+1745	254	\N	STAND, CYMBAL	\N	Good	HS MUSIC	GIBRALTAR	GIB-5710	\N	1	\N	\N	\N
+1747	296	TPT	TIMPANI, 23 INCH	36264	Good	MS MUSIC	LUDWIG	LKS423FG	\N	1	\N	\N	\N
+1748	309	X	XYLOPHONE	25	Good	MS MUSIC	MAJESTIC	x55 352	\N	16	\N	\N	\N
+1749	182	\N	PA SYSTEM, ALL-IN-ONE	S1402186AA8	Good	HS MUSIC	BEHRINGER	EPS500MP3	\N	1	\N	\N	\N
+1570	96	TP	TRUMPET, B FLAT	33911	Good	\N	SCHILKE	B1L	TP	16	Mark Anding	1076	\N
+1753	209	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	9	\N	\N	\N
+1758	215	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	15	\N	\N	\N
+1759	203	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	3	\N	\N	\N
+1760	253	CMZ	CYMBALS, HANDHELD 18 INCH	ZIL-A0447	Good	HS MUSIC	ZILDJIAN	18 Inch Symphonic Viennese Tone	\N	1	\N	\N	\N
+1761	378	GRW	GUITAR, CUTAWAY	\N	Good	MS MUSIC	UNKNOWN	\N	\N	15	\N	\N	\N
+1762	379	GRW	GUITAR, CUTAWAY	\N	Good	MS MUSIC	UNKNOWN	\N	\N	16	\N	\N	\N
+1769	304	TBN	TUBANOS	1-7	Good	MS MUSIC	REMO	12 inch	\N	7	\N	\N	\N
+2064	263	DK	DRUMSET	\N	Good	DRUM ROOM 1	YAMAHA	\N	\N	2	\N	\N	\N
+2061	361	GRC	GUITAR, CLASSICAL	HKZ114314	Good	MS MUSIC	YAMAHA	40	\N	5	\N	\N	\N
+2065	324	DK	DRUMSET	\N	Good	DRUM ROOM 2	YAMAHA	\N	\N	6	\N	\N	\N
+2066	411	CL	CLARINET, B FLAT	27251	Good	\N	YAMAHA	\N	CL	5	Mark Anding	1076	\N
+1885	398	VN	VIOLIN	D 0933 1998	Good	\N	WILLIAM LEWIS & SON	\N	\N	3	Gakenia Mucharie	1075	\N
+1771	588	SXA	SAXOPHONE, ALTO	11110695	Good	INSTRUMENT STORE	ETUDE	\N	AX	23	\N	\N	\N
+1877	614	SXA	SAXOPHONE, ALTO	XF57089	Good	\N	JUPITER	JAS 710	AX	45	Fatuma Tall	301	\N
+2059	402	CLE	CLARINET, ALTO IN E FLAT	1260	Good	\N	YAMAHA	\N	\N	1	Mark Anding	1076	\N
+1879	634	SXA	SAXOPHONE, ALTO	BF54604	Good	\N	JUPITER	JAS 710	AX	65	Ethan Sengendo	393	\N
+2056	120	TP	TRUMPET, B FLAT	124816	Good	\N	ETUDE	\N	TP	37	Masoud Ibrahim	787	\N
+1743	126	TP	TRUMPET, B FLAT	H35214	Good	\N	BLESSING	\N	TP	40	Masoud Ibrahim	787	\N
+1588	478	CL	CLARINET, B FLAT	BE63657	Good	\N	JUPITER	JCL710	CL	70	Gakenia Mucharie	1075	\N
+1514	140	TP	TRUMPET, B FLAT	XA06017	Good	INSTRUMENT STORE	JUPITER	\N	TP	51	\N	\N	\N
+1772	667	SXT	SAXOPHONE, TENOR	CF08026	Good	INSTRUMENT STORE	JUPITER	JTS700	TX	23	\N	\N	\N
+1741	32	TN	TROMBONE, TENOR	646721	Good	\N	YAMAHA	\N	TB	18	Andrew Wachira	268	\N
+1892	24	TN	TROMBONE, TENOR	316975	Good	\N	YAMAHA	\N	TB	10	Margaret Oganda	1078	\N
+1527	573	SXA	SAXOPHONE, ALTO	200547	Good	INSTRUMENT STORE	GIARDINELLI	\N	AX	8	\N	\N	\N
+1511	137	TP	TRUMPET, B FLAT	XA08294	Good	INSTRUMENT STORE	JUPITER	\N	TP	48	\N	\N	\N
+1723	312	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	1	\N	\N	\N
+1534	569	SXA	SAXOPHONE, ALTO	11120109	Good	INSTRUMENT STORE	ETUDE	\N	AX	4	\N	\N	\N
+1512	138	TP	TRUMPET, B FLAT	XA08319	Good	INSTRUMENT STORE	JUPITER	\N	TP	49	\N	\N	\N
+1725	397	VN	VIOLIN	3923725	Good	INSTRUMENT STORE	AUBERT	\N	\N	2	\N	\N	\N
+1548	571	SXA	SAXOPHONE, ALTO	12080618	Good	INSTRUMENT STORE	ETUDE	\N	AX	6	\N	\N	\N
+1555	612	SXA	SAXOPHONE, ALTO	XF56514	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	43	\N	\N	\N
+1580	568	SXA	SAXOPHONE, ALTO	11120090	Good	INSTRUMENT STORE	ETUDE	\N	AX	3	\N	\N	\N
+1602	585	SXA	SAXOPHONE, ALTO	AS1003847	Good	INSTRUMENT STORE	BARRINGTON	\N	AX	20	\N	\N	\N
+1726	45	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	13	\N	\N	\N
+1728	34	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	2	\N	\N	\N
+1549	35	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	3	\N	\N	\N
+1578	584	SXA	SAXOPHONE, ALTO	AS1001039	Good	MS MUSIC	BARRINGTON	\N	AX	19	\N	\N	\N
+1582	180	\N	MICROPHONE	\N	Good	INSTRUMENT STORE	SHURE	SM58	\N	2	\N	\N	\N
+1746	468	CL	CLARINET, B FLAT	XE54704	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	60	\N	\N	\N
+1787	134	TP	TRUMPET, B FLAT	XA08653	Good	INSTRUMENT STORE	JUPITER	\N	TP	45	\N	\N	\N
+1878	615	SXA	SAXOPHONE, ALTO	XF57192	Good	MS MUSIC	JUPITER	JAS 710	AX	46	\N	\N	\N
+1931	332	X	XYLOPHONE	\N	Good	UPPER ES MUSIC	ORFF	\N	\N	4	\N	\N	\N
+1579	50	TNTP	TROMBONE, TENOR - PLASTIC	PB17070322	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	18	\N	\N	\N
+1526	645	SXT	SAXOPHONE, TENOR	403557	Good	INSTRUMENT STORE	VITO	\N	TX	1	\N	\N	\N
+1528	652	SXT	SAXOPHONE, TENOR	N4200829	Good	INSTRUMENT STORE	SELMER	\N	TX	8	\N	\N	\N
+1532	650	SXT	SAXOPHONE, TENOR	310278	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	TX	6	\N	\N	\N
+1536	659	SXT	SAXOPHONE, TENOR	13120021	Good	INSTRUMENT STORE	ALLORA	\N	TX	15	\N	\N	\N
+1724	9	HNF	HORN, F	619468	Good	INSTRUMENT STORE	HOLTON	H281	HN	2	\N	\N	\N
+1727	480	CLB	CLARINET, BASS	Y3717	Good	INSTRUMENT STORE	VITO	\N	BCL	2	\N	\N	\N
+1861	12	HNF	HORN, F	BC00278	Good	INSTRUMENT STORE	JUPITER	JHR1100	HN	5	\N	\N	\N
+1756	444	CL	CLARINET, B FLAT	J65434	Good	\N	YAMAHA	\N	CL	36	Anastasia Mulema	979	2024-06-04
+1518	640	SXB	SAXOPHONE, BARITONE	1360873	Good	INSTRUMENT STORE	SELMER	\N	BX	1	\N	\N	\N
+1540	644	SXB	SAXOPHONE, BARITONE	CF05160	Good	INSTRUMENT STORE	JUPITER	JBS 1000	BX	5	\N	\N	\N
+1517	163	TB	TUBA	\N	Good	INSTRUMENT STORE	BOOSEY & HAWKES	Imperial EEb	T	3	\N	\N	\N
+1544	303	TBN	TUBANOS	\N	Good	MS MUSIC	REMO	10 Inch	\N	5	\N	\N	\N
+1551	170	AMB	AMPLIFIER, BASS	Z9G3740	Good	MS MUSIC	ROLAND	Cube-120 XL	\N	6	\N	\N	\N
+1552	173	AMG	AMPLIFIER, GUITAR	M 1005297	Good	MS MUSIC	FENDER	STAGE 160	\N	8	\N	\N	\N
+1559	252	CMY	CYMBALS, HANDHELD 16 INCH	\N	Good	HS MUSIC	SABIAN	SAB SR 16BOL	\N	1	\N	\N	\N
+1581	175	AMK	AMPLIFIER, KEYBOARD	OBD#1230164	Good	MS MUSIC	PEAVEY	KB4	\N	10	\N	\N	\N
+1583	184	KB	KEYBOARD	TCK 611	Good	HS MUSIC	CASIO	\N	\N	2	\N	\N	\N
+1584	256	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	2	\N	\N	\N
+1585	258	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	3	\N	\N	\N
+1586	260	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	5	\N	\N	\N
+1587	255	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	1	\N	\N	\N
+1589	14	MTL	METALLOPHONE	\N	Good	\N	ORFF	\N	\N	1	\N	\N	\N
+1590	187	KB	KEYBOARD	\N	Good	\N	CASIO	TC-360	\N	23	\N	\N	\N
+1591	217	\N	STAND, MUSIC	50052	Good	\N	WENGER	\N	\N	1	\N	\N	\N
+1597	176	AMG	AMPLIFIER, GUITAR	S190700059B4P	Good	\N	BUGERA	\N	\N	12	\N	\N	\N
+1599	320	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	3	\N	\N	\N
+1600	177	AMG	AMPLIFIER, GUITAR	B-749002	Good	\N	FENDER	Blue Junior	\N	13	\N	\N	\N
+1601	351	GRA	GUITAR, ACOUSTIC	\N	Good	\N	UNKNOWN	\N	\N	32	\N	\N	\N
+1604	322	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	5	\N	\N	\N
+1513	139	TP	TRUMPET, B FLAT	XA08322	Good	INSTRUMENT STORE	JUPITER	\N	TP	50	\N	\N	\N
+1515	141	TP	TRUMPET, B FLAT	XA05452	Good	INSTRUMENT STORE	JUPITER	\N	TP	52	\N	\N	\N
+1605	319	BK	BELL KIT	\N	Good	MS MUSIC	PEARL	PK900C	\N	2	\N	\N	\N
+1607	291	SRM	SNARE, MARCHING	1P-3086	Good	MS MUSIC	YAMAHA	MS 9014	\N	6	\N	\N	\N
+1609	620	SXA	SAXOPHONE, ALTO	XF56962	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	51	\N	\N	\N
+1612	633	SXA	SAXOPHONE, ALTO	BF54617	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	64	\N	\N	\N
+1638	586	SXA	SAXOPHONE, ALTO	AS 1010089	Good	INSTRUMENT STORE	BARRINGTON	\N	AX	21	\N	\N	\N
+1655	607	SXA	SAXOPHONE, ALTO	XF54539	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	38	\N	\N	\N
+1658	609	SXA	SAXOPHONE, ALTO	XF54577	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	40	\N	\N	\N
+1616	212	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	12	\N	\N	\N
+1617	178	AMG	AMPLIFIER, GUITAR	LCB500-A126704	Good	\N	FISHMAN	494-000-582	\N	14	\N	\N	\N
+1619	286	SR	SNARE	\N	Good	UPPER ES MUSIC	PEARL	\N	\N	2	\N	\N	\N
+1620	181	MX	MIXER	BGXL01101	Good	MS MUSIC	YAMAHA	MG12XU	\N	15	\N	\N	\N
+1622	347	GRB	GUITAR, BASS	15020198	Good	HS MUSIC	SQUIER	Modified Jaguar	\N	4	\N	\N	\N
+1623	240	\N	CRADLE, CONCERT CYMBAL	\N	Good	HS MUSIC	GIBRALTAR	GIB-7614	\N	1	\N	\N	\N
+1631	381	GRE	GUITAR, ELECTRIC	15029891	Good	HS MUSIC	SQUIER	StratPkHSSCAR	\N	1	\N	\N	\N
+1686	577	SXA	SAXOPHONE, ALTO	11120110	Good	INSTRUMENT STORE	ETUDE	\N	AX	12	\N	\N	\N
+1688	590	SXA	SAXOPHONE, ALTO	11110696	Good	INSTRUMENT STORE	ETUDE	\N	AX	25	\N	\N	\N
+1693	591	SXA	SAXOPHONE, ALTO	91145	Good	INSTRUMENT STORE	CONSERVETE	\N	AX	26	\N	\N	\N
+1624	54	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	22	\N	\N	\N
+1625	55	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	23	\N	\N	\N
+1626	63	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	31	\N	\N	\N
+1627	65	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	33	\N	\N	\N
+1628	67	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	35	\N	\N	\N
+1664	314	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	3	\N	\N	\N
+1629	69	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	37	\N	\N	\N
+1630	70	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	38	\N	\N	\N
+1634	71	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	39	\N	\N	\N
+1635	72	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	40	\N	\N	\N
+1637	73	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	41	\N	\N	\N
+1682	59	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	27	\N	\N	\N
+1683	354	GRA	GUITAR, ACOUSTIC	00Y145219	Good	\N	YAMAHA	F 325	\N	22	\N	\N	\N
+1690	245	CG	CONGA	\N	Good	HS MUSIC	YAMAHA	\N	\N	24	\N	\N	\N
+1691	246	CG	CONGA	\N	Good	HS MUSIC	YAMAHA	\N	\N	25	\N	\N	\N
+1666	201	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	1	\N	\N	\N
+1685	60	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	KAIZER	\N	PTB	28	\N	\N	\N
+1689	61	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	29	\N	\N	\N
+1695	44	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	12	\N	\N	\N
+1697	221	PD	PRACTICE PAD	ISK NO.26	Good	UPPER ES MUSIC	YAMAHA	4 INCH	\N	1	\N	\N	\N
+1707	355	GRA	GUITAR, ACOUSTIC	00Y224899	Good	HS MUSIC	YAMAHA	F 325	\N	23	\N	\N	\N
+1708	356	GRA	GUITAR, ACOUSTIC	00Y224741	Good	HS MUSIC	YAMAHA	F 325	\N	24	\N	\N	\N
+1709	194	PE	PIANO, ELECTRIC	BCAZ01088	Good	LOWER ES MUSIC	YAMAHA	CLP 7358	\N	9	\N	\N	\N
+1711	281	PD	PRACTICE PAD	\N	Good	UPPER ES MUSIC	YAMAHA	4 INCH	\N	2	\N	\N	\N
+1675	352	GRA	GUITAR, ACOUSTIC	00Y224811	Good	INSTRUMENT STORE	YAMAHA	F 325	\N	19	\N	\N	\N
+1615	225	TDR	TALKING DRUM	\N	Good	INSTRUMENT STORE	REMO	Small	\N	1	\N	\N	\N
+4166	\N	DMMO	DUMMY 1	DUMMM4	New	INSTRUMENT STORE	DUMMY MAKER	\N	\N	5	\N	\N	\N
+1717	375	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	YAMAHA	40	\N	27	\N	\N	\N
+1684	655	SXT	SAXOPHONE, TENOR	420486	Good	INSTRUMENT STORE	VITO	\N	TX	11	\N	\N	\N
+1516	142	TP	TRUMPET, B FLAT	XA06111	Good	INSTRUMENT STORE	JUPITER	\N	TP	53	\N	\N	\N
+1994	602	SXA	SAXOPHONE, ALTO	XF54322	Good	\N	JUPITER	JAS 710	AX	33	Noah Ochomo	1071	\N
+2058	593	SXA	SAXOPHONE, ALTO	XF54181	Good	\N	JUPITER	JAS 710	AX	28	Romilly Haysmith	937	\N
+2054	661	SXT	SAXOPHONE, TENOR	XF03739	Good	\N	JUPITER	\N	TX	17	Rohan Giri	454	\N
+2087	162	TB	TUBA	533558	Good	MS MUSIC	YAMAHA	\N	T	2	\N	\N	\N
+1752	208	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	8	\N	\N	\N
+1732	372	GRC	GUITAR, CLASSICAL	\N	Good	MS MUSIC	PARADISE	18	\N	18	\N	\N	\N
+2090	195	PE	PIANO, ELECTRIC	BCZZ01016	Good	UPPER ES MUSIC	YAMAHA	CLP-645B	\N	7	\N	\N	\N
+2079	192	PE	PIANO, ELECTRIC	YCQN01006	Good	HS MUSIC	YAMAHA	CAP 329	\N	5	\N	\N	\N
+2081	193	PE	PIANO, ELECTRIC	EBQN02222	Good	HS MUSIC	YAMAHA	P-95	\N	6	\N	\N	\N
+2082	262	DK	DRUMSET	\N	Good	HS MUSIC	YAMAHA	\N	\N	1	\N	\N	\N
+2083	239	BLC	BELLS, CONCERT	112158	Good	HS MUSIC	YAMAHA	YG-250D Standard	\N	1	\N	\N	\N
+2085	289	SR	SNARE	\N	Good	HS MUSIC	YAMAHA	\N	\N	27	\N	\N	\N
+2086	290	SR	SNARE	\N	Good	HS MUSIC	YAMAHA	\N	\N	28	\N	\N	\N
+1667	213	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	13	\N	\N	\N
+1519	151	TP	TRUMPET, B FLAT	BA09236	Good	INSTRUMENT STORE	JUPITER	\N	TP	62	\N	\N	\N
+1520	152	TP	TRUMPET, B FLAT	BA08359	Good	INSTRUMENT STORE	JUPITER	\N	TP	63	\N	\N	\N
+1521	154	TP	TRUMPET, B FLAT	BA09193	Good	INSTRUMENT STORE	JUPITER	\N	TP	65	\N	\N	\N
+1523	156	TP	TRUMPET, B FLAT	CA16033	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	67	\N	\N	\N
+1524	157	TP	TRUMPET, B FLAT	CAS15546	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	68	\N	\N	\N
+1525	158	TP	TRUMPET, B FLAT	CAS16006	Good	INSTRUMENT STORE	JUPITER	JTR 700	TP	69	\N	\N	\N
+1529	500	FL	FLUTE	K96337	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	12	\N	\N	\N
+1535	423	CL	CLARINET, B FLAT	282570	Good	INSTRUMENT STORE	VITO	\N	CL	15	\N	\N	\N
+1537	424	CL	CLARINET, B FLAT	206244	Good	INSTRUMENT STORE	AMATI KRASLICE	\N	CL	16	\N	\N	\N
+1538	508	FL	FLUTE	2SP-K96103	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	16	\N	\N	\N
+1539	4	BH	BARITONE/EUPHONIUM	987998	Good	INSTRUMENT STORE	KING	\N	BH	5	\N	\N	\N
+1541	541	FL	FLUTE	XD59821	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	46	\N	\N	\N
+1542	542	FL	FLUTE	XD59741	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	47	\N	\N	\N
+1543	561	FL	FLUTE	DD58003	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	67	\N	\N	\N
+1546	147	TP	TRUMPET, B FLAT	XA14523	Good	INSTRUMENT STORE	JUPITER	\N	TP	58	\N	\N	\N
+1547	85	TP	TRUMPET, B FLAT	831664	Good	INSTRUMENT STORE	JUPITER	\N	TP	5	\N	\N	\N
+1553	537	FL	FLUTE	WD62143	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	42	\N	\N	\N
+1554	451	CL	CLARINET, B FLAT	1312128	Good	INSTRUMENT STORE	ALLORA	\N	CL	43	\N	\N	\N
+1556	452	CL	CLARINET, B FLAT	1312139	Good	INSTRUMENT STORE	ALLORA	\N	CL	44	\N	\N	\N
+1557	539	FL	FLUTE	XD59192	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	44	\N	\N	\N
+1558	453	CL	CLARINET, B FLAT	KE54780	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	45	\N	\N	\N
+1608	526	FL	FLUTE	D1206521	Good	INSTRUMENT STORE	ETUDE	\N	FL	31	\N	\N	\N
+1610	460	CL	CLARINET, B FLAT	XE54946	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	52	\N	\N	\N
+1611	558	FL	FLUTE	DD57954	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	64	\N	\N	\N
+1613	559	FL	FLUTE	DD58158	Good	INSTRUMENT STORE	JUPITER	JFL 700	FL	65	\N	\N	\N
+1614	474	CL	CLARINET, B FLAT	BE63671	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	66	\N	\N	\N
+1633	504	FL	FLUTE	2SP-K90658	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	14	\N	\N	\N
+1636	520	FL	FLUTE	28411029	Good	INSTRUMENT STORE	PRELUDE	711	FL	25	\N	\N	\N
+1657	448	CL	CLARINET, B FLAT	1209179	Good	INSTRUMENT STORE	ETUDE	\N	CL	40	\N	\N	\N
+1659	449	CL	CLARINET, B FLAT	1209180	Good	INSTRUMENT STORE	ETUDE	\N	CL	41	\N	\N	\N
+1660	450	CL	CLARINET, B FLAT	1209177	Good	INSTRUMENT STORE	ETUDE	\N	CL	42	\N	\N	\N
+1661	544	FL	FLUTE	XD59774	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	49	\N	\N	\N
+1662	545	FL	FLUTE	XD59164	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	50	\N	\N	\N
+1663	459	CL	CLARINET, B FLAT	KE54774	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	51	\N	\N	\N
+1677	148	TP	TRUMPET, B FLAT	XA14343	Good	INSTRUMENT STORE	JUPITER	\N	TP	59	\N	\N	\N
+1678	149	TP	TRUMPET, B FLAT	XA033335	Good	INSTRUMENT STORE	JUPITER	\N	TP	60	\N	\N	\N
+1679	150	TP	TRUMPET, B FLAT	BA09439	Good	INSTRUMENT STORE	JUPITER	\N	TP	61	\N	\N	\N
+1680	418	CL	CLARINET, B FLAT	30614E	Good	INSTRUMENT STORE	SIGNET	\N	CL	10	\N	\N	\N
+1681	419	CL	CLARINET, B FLAT	B59862	Good	INSTRUMENT STORE	VITO	\N	CL	11	\N	\N	\N
+1692	521	FL	FLUTE	K98973	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	26	\N	\N	\N
+1694	522	FL	FLUTE	P11876	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	27	\N	\N	\N
+1696	436	CL	CLARINET, B FLAT	11299279	Good	INSTRUMENT STORE	ETUDE	\N	CL	28	\N	\N	\N
+1719	523	FL	FLUTE	K98879	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	28	\N	\N	\N
+1720	437	CL	CLARINET, B FLAT	11299280	Good	INSTRUMENT STORE	ETUDE	\N	CL	29	\N	\N	\N
+1721	524	FL	FLUTE	K99078	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	29	\N	\N	\N
+1618	374	GRC	GUITAR, CLASSICAL	\N	Good	INSTRUMENT STORE	PARADISE	20	\N	20	\N	\N	\N
+1722	438	CL	CLARINET, B FLAT	11299277	Good	INSTRUMENT STORE	ETUDE	\N	CL	30	\N	\N	\N
+1729	563	OB	OBOE	B33402	Good	INSTRUMENT STORE	BUNDY	\N	OB	2	\N	\N	\N
+1730	565	PC	PICCOLO	12111016	Good	INSTRUMENT STORE	BUNDY	\N	PC	2	\N	\N	\N
+1508	118	TP	TRUMPET, B FLAT	H35268	Good	INSTRUMENT STORE	BLESSING	\N	TP	36	\N	\N	\N
+1509	135	TP	TRUMPET, B FLAT	XA08649	Good	INSTRUMENT STORE	JUPITER	\N	TP	46	\N	\N	\N
+1744	658	SXT	SAXOPHONE, TENOR	13120005	Good	INSTRUMENT STORE	ALLORA	\N	TX	14	\N	\N	\N
+1665	487	FL	FLUTE	T479	Good	INSTRUMENT STORE	HEIMAR	\N	FL	4	\N	\N	\N
+2091	188	PE	PIANO, ELECTRIC	GBRCKK 01021	Good	INSTRUMENT STORE	YAMAHA	CVP 303	\N	1	\N	\N	\N
+1712	598	SXA	SAXOPHONE, ALTO	XF54370	Good	MS MUSIC	JUPITER	JAS 710	AX	31	\N	\N	\N
+1510	136	TP	TRUMPET, B FLAT	XA08643	Good	INSTRUMENT STORE	JUPITER	\N	TP	47	\N	\N	\N
+2084	515	FL	FLUTE	917792	Good	MS MUSIC	YAMAHA	\N	FL	20	\N	\N	\N
+1989	109	TP	TRUMPET, B FLAT	G27536	Good	\N	BLESSING	\N	TP	29	Noah Ochomo	1071	\N
+1595	516	FL	FLUTE	J94358	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	21	\N	\N	\N
+1594	494	FL	FLUTE	G15104	Good	\N	GEMEINHARDT	2SP	FL	9	Margaret Oganda	1078	\N
+1687	656	SXT	SAXOPHONE, TENOR	TS10050027	Good	INSTRUMENT STORE	BUNDY	\N	TX	12	\N	\N	\N
+1566	11	HNF	HORN, F	XC07411	Good	INSTRUMENT STORE	JUPITER	JHR700	HN	4	\N	\N	\N
+1705	648	SXT	SAXOPHONE, TENOR	26286	Good	\N	YAMAHA	\N	TX	4	\N	\N	\N
+1872	10	HNF	HORN, F	602	Good	\N	HOLTON	\N	HN	3	Jamison Line	172	\N
+1800	479	CLB	CLARINET, BASS	18250	Good	INSTRUMENT STORE	VITO	\N	BCL	1	\N	\N	\N
+2063	93	TP	TRUMPET, B FLAT	553853	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	13	\N	\N	\N
+1606	321	BK	BELL KIT	\N	Good	\N	PEARL	PK900C	\N	4	Mahori	\N	\N
+1596	496	FL	FLUTE	2SP-L89133	Good	\N	GEMEINHARDT	\N	FL	10	Zoe Mcdowell	\N	\N
+1842	642	SXB	SAXOPHONE, BARITONE	XF05936	Good	PIANO ROOM	JUPITER	JBS 1000	BX	3	\N	\N	\N
+1788	641	SXB	SAXOPHONE, BARITONE	B15217	Good	\N	VIENNA	\N	BX	2	Fatuma Tall	301	\N
+1814	38	TNAP	TROMBONE, ALTO - PLASTIC	BM18030151	Good	INSTRUMENT STORE	PBONE	Mini	PTB	6	\N	\N	\N
+1750	40	TNAP	TROMBONE, ALTO - PLASTIC	BM17120387	Good	INSTRUMENT STORE	PBONE	Mini	PTB	8	\N	\N	\N
+1565	350	VCL	CELLO, (VIOLONCELLO)	\N	Good	\N	WENZER KOHLER	\N	C	2	Mark Anding	1076	\N
+1795	7	BT	BARITONE/TENOR HORN	575586	Good	INSTRUMENT STORE	BESSON	\N	BH	1	\N	\N	\N
+1592	572	SXA	SAXOPHONE, ALTO	200585	Good	\N	GIARDINELLI	\N	AX	7	Gwendolyn Anding	1077	\N
+1713	632	SXA	SAXOPHONE, ALTO	BF54335	Good	\N	JUPITER	JAS 710	AX	63	Tawheed Hussain	177	\N
+1706	47	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	TROMBA	Pro	PTB	15	Kianu Ruiz Stannah	276	\N
+1593	8	HNF	HORN, F	619528	Good	\N	HOLTON	H281	HN	1	Gwendolyn Anding	1077	\N
+1603	349	VCL	CELLO, (VIOLONCELLO)	100725	Good	\N	CREMONA	\N	C	1	Gwendolyn Anding	1077	\N
+1621	383	GRE	GUITAR, ELECTRIC	116108513	Good	\N	FENDER	CD-60CE Mahogany	\N	30	Gakenia Mucharie	1075	\N
+1905	111	TP	TRUMPET, B FLAT	645447	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	31	\N	\N	\N
+2044	543	FL	FLUTE	XD59816	Good	\N	JUPITER	JEL 710	FL	48	Teagan Wood	159	\N
+1844	605	SXA	SAXOPHONE, ALTO	XF53797	Good	\N	JUPITER	JAS 710	AX	36	Thomas Higgins	342	\N
+1990	666	SXT	SAXOPHONE, TENOR	CF07965	Good	\N	JUPITER	JTS700	TX	22	Tawheed Hussain	177	\N
+2043	23	TN	TROMBONE, TENOR	303168	Good	\N	YAMAHA	\N	TB	9	Zameer Nanji	257	\N
+1757	433	CL	CLARINET, B FLAT	405117	Good	INSTRUMENT STORE	YAMAHA	\N	CL	25	\N	\N	\N
+1908	363	GRC	GUITAR, CLASSICAL	HKZ104831	Good	MS MUSIC	YAMAHA	40	\N	7	\N	\N	\N
+1901	1	BH	BARITONE/EUPHONIUM	601249	Good	\N	BOOSEY & HAWKES	Soveriegn	BH	2	Kasra Feizzadeh	135	\N
+1533	546	FL	FLUTE	XD60579	Good	\N	JUPITER	JEL 710	FL	51	Nellie Odera	1081	\N
+1894	596	SXA	SAXOPHONE, ALTO	XF54480	Good	\N	JUPITER	JAS 710	AX	30	Margaret Oganda	1078	\N
+1899	628	SXA	SAXOPHONE, ALTO	AF53348	Good	\N	JUPITER	JAS 710	AX	59	Reuben Szuchman	848	\N
+1848	455	CL	CLARINET, B FLAT	KE56579	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	47	\N	\N	\N
+1698	477	CL	CLARINET, B FLAT	BE63692	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	69	\N	\N	\N
+1699	128	TP	TRUMPET, B FLAT	34928	Good	INSTRUMENT STORE	BLESSING	\N	TP	41	\N	\N	\N
+1703	604	SXA	SAXOPHONE, ALTO	XF54451	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	35	\N	\N	\N
+1819	608	SXA	SAXOPHONE, ALTO	XF54476	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	39	\N	\N	\N
+1701	663	SXT	SAXOPHONE, TENOR	AF04276	Good	INSTRUMENT STORE	JUPITER	\N	TX	19	\N	\N	\N
+2097	43	TNTP	TROMBONE, TENOR - PLASTIC	PB17070488	Good	INSTRUMENT STORE	TROMBA	Pro	PTB	11	\N	\N	\N
+1700	130	TP	TRUMPET, B FLAT	35272	Good	INSTRUMENT STORE	BLESSING	\N	TP	42	\N	\N	\N
+1918	458	CL	CLARINET, B FLAT	KE54751	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	50	\N	\N	\N
+1718	426	CL	CLARINET, B FLAT	25247	Good	INSTRUMENT STORE	YAMAHA	\N	CL	18	\N	\N	\N
+1880	555	FL	FLUTE	BD62784	Good	MS MUSIC	JUPITER	JEL 710	FL	61	\N	\N	\N
+2101	101	TP	TRUMPET, B FLAT	H35502	Good	INSTRUMENT STORE	BLESSING	\N	TP	21	\N	\N	\N
+1674	68	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	36	\N	\N	\N
+1715	346	GRB	GUITAR, BASS	ICS10191321	Good	INSTRUMENT STORE	FENDER	Squire	\N	3	\N	\N	\N
+1716	82	TP	TRUMPET, B FLAT	G29437	Good	MS MUSIC	BLESSING	\N	TP	2	\N	\N	\N
+1876	313	BL	BELL SET	\N	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	2	\N	\N	\N
+1740	427	CL	CLARINET, B FLAT	J65020	Good	MS MUSIC	YAMAHA	\N	CL	19	\N	\N	\N
+1797	160	TPP	TRUMPET, POCKET	PT1309020	Good	MS MUSIC	ALLORA	\N	TPP	1	\N	\N	\N
+1702	145	TP	TRUMPET, B FLAT	XA04094	Good	MS MUSIC	JUPITER	\N	TP	56	\N	\N	\N
+2099	457	CL	CLARINET, B FLAT	KE54676	Good	MS MUSIC	JUPITER	JCL710	CL	49	\N	\N	\N
+1915	621	SXA	SAXOPHONE, ALTO	YF57348	Good	\N	JUPITER	JAS 710	AX	52	Mark Anding	1076	\N
+1923	617	SXA	SAXOPHONE, ALTO	XF56283	Good	\N	JUPITER	JAS 710	AX	48	Vanaaya Patel	304	\N
+1895	384	GRE	GUITAR, ELECTRIC	116108578	Good	\N	FENDER	CD-60CE Mahogany	\N	31	Angel Gray	\N	\N
+1561	567	SXA	SAXOPHONE, ALTO	11120072	Good	INSTRUMENT STORE	ETUDE	\N	AX	2	\N	\N	\N
+1562	646	SXT	SAXOPHONE, TENOR	227671	Good	INSTRUMENT STORE	BUSCHER	\N	TX	2	\N	\N	\N
+1564	389	GRT	GUITAR, HALF	10	Good	\N	KAY	\N	\N	5	\N	\N	\N
+1567	285	SR	SNARE	6276793	Good	MS MUSIC	LUDWIG	\N	\N	1	\N	\N	\N
+1568	295	TML	TIMBALI	3112778	Good	MS MUSIC	LUDWIG	\N	\N	1	\N	\N	\N
+1569	257	DJ	DJEMBE	\N	Good	MS MUSIC	CUSTOM	\N	\N	7	\N	\N	\N
+1571	275	SRM	SNARE, MARCHING	1P-3099	Good	MS MUSIC	YAMAHA	MS 9014	\N	2	\N	\N	\N
+1572	278	SRM	SNARE, MARCHING	1P-3076	Good	MS MUSIC	YAMAHA	MS 9014	\N	5	\N	\N	\N
+1574	288	SR	SNARE	NIL	Good	INSTRUMENT STORE	YAMAHA	\N	\N	26	\N	\N	\N
+1560	143	TP	TRUMPET, B FLAT	XA02614	Good	INSTRUMENT STORE	JUPITER	\N	TP	54	\N	\N	\N
+1754	5	BH	BARITONE/EUPHONIUM	533835	Good	\N	YAMAHA	\N	BH	6	Etienne Carlevato	980	2024-06-04
+1704	547	FL	FLUTE	YD66330	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	53	\N	\N	2024-06-04
+1738	467	CL	CLARINET, B FLAT	XE54680	Good	\N	JUPITER	JCL710	CL	59	Aisha Awori	960	2024-06-04
+1900	464	CL	CLARINET, B FLAT	XE54692	Good	\N	JUPITER	JCL710	CL	56	Lilla Vestergaard	928	2024-06-04
+2102	103	TP	TRUMPET, B FLAT	H35099	Good	INSTRUMENT STORE	BLESSING	\N	TP	23	\N	\N	\N
+2057	606	SXA	SAXOPHONE, ALTO	XF54452	Good	\N	JUPITER	JAS 710	AX	37	Tanay Cherickel	974	2024-06-04
+1550	624	SXA	SAXOPHONE, ALTO	XF54149	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	55	\N	\N	\N
+1598	90	TP	TRUMPET, B FLAT	F24090	Good	\N	BLESSING	\N	TP	10	Gakenia Mucharie	1075	2024-06-04
+1714	463	CL	CLARINET, B FLAT	XE54729	Good	\N	JUPITER	JCL710	CL	55	Lauren Mucci	981	2024-06-04
+2046	625	SXA	SAXOPHONE, ALTO	AF53425	Good	\N	JUPITER	JAS 710	AX	56	Milan Jayaram	967	2024-06-04
+1902	456	CL	CLARINET, B FLAT	KE56608	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	48	\N	\N	\N
+1563	153	TP	TRUMPET, B FLAT	BA09444	Good	INSTRUMENT STORE	JUPITER	\N	TP	64	\N	\N	\N
+1573	3	BH	BARITONE/EUPHONIUM	839431	Good	\N	AMATI KRASLICE	\N	BH	4	\N	\N	\N
+1575	510	FL	FLUTE	K98713	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	17	\N	\N	\N
+1576	512	FL	FLUTE	2SP-K99109	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	18	\N	\N	\N
+1640	587	SXA	SAXOPHONE, ALTO	11110740	Good	INSTRUMENT STORE	ETUDE	\N	AX	22	\N	\N	\N
+1641	386	GRT	GUITAR, HALF	7	Good	\N	KAY	\N	\N	2	\N	\N	\N
+1644	600	SXA	SAXOPHONE, ALTO	XF54574	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	32	\N	\N	\N
+1648	603	SXA	SAXOPHONE, ALTO	XF54336	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	34	\N	\N	\N
+1650	581	SXA	SAXOPHONE, ALTO	362477A	Good	INSTRUMENT STORE	YAMAHA	\N	AX	16	\N	\N	\N
+1646	74	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	INSTRUMENT STORE	PBONE	\N	PTB	42	\N	\N	\N
+1649	42	TNTP	TROMBONE, TENOR - PLASTIC	PB17070395	Good	\N	TROMBA	Pro	PTB	10	\N	\N	\N
+1639	517	FL	FLUTE	28411021	Good	INSTRUMENT STORE	PRELUDE	\N	FL	22	\N	\N	\N
+1642	439	CL	CLARINET, B FLAT	11299276	Good	INSTRUMENT STORE	ETUDE	\N	CL	31	\N	\N	\N
+1643	527	FL	FLUTE	D1206485	Good	INSTRUMENT STORE	ETUDE	\N	FL	32	\N	\N	\N
+1645	528	FL	FLUTE	D1206556	Good	INSTRUMENT STORE	ETUDE	\N	FL	33	\N	\N	\N
+1647	529	FL	FLUTE	206295	Good	INSTRUMENT STORE	ETUDE	\N	FL	34	\N	\N	\N
+1651	116	TP	TRUMPET, B FLAT	756323	Good	INSTRUMENT STORE	YAMAHA	\N	TP	35	\N	\N	\N
+1652	530	FL	FLUTE	206261	Good	INSTRUMENT STORE	ETUDE	\N	FL	35	\N	\N	\N
+1653	531	FL	FLUTE	K96124	Good	INSTRUMENT STORE	GEMEINHARDT	\N	FL	36	\N	\N	\N
+1654	533	FL	FLUTE	WD57818	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	38	\N	\N	\N
+1656	447	CL	CLARINET, B FLAT	1209178	Good	INSTRUMENT STORE	ETUDE	\N	CL	39	\N	\N	\N
+1970	92	TP	TRUMPET, B FLAT	678970	Good	\N	YAMAHA	YTR 2335	TP	12	Ignacio Biafore	936	\N
+2051	536	FL	FLUTE	WD62303	Good	\N	JUPITER	JEL 710	FL	41	Julian Dibling	939	\N
+2049	534	FL	FLUTE	WD62211	Good	\N	JUPITER	JEL 710	FL	39	Leo Cutler	267	\N
+1997	538	FL	FLUTE	WD62183	Good	\N	JUPITER	JEL 710	FL	43	Mark Anding	1076	\N
+1983	57	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	KAIZER	\N	PTB	25	Mark Anding	1076	\N
+1991	664	SXT	SAXOPHONE, TENOR	CF07952	Good	\N	JUPITER	JTS700	TX	20	Mark Anding	1076	\N
+2042	654	SXT	SAXOPHONE, TENOR	063739A	Good	\N	YAMAHA	\N	TX	10	Finlay Haswell	951	\N
+2048	662	SXT	SAXOPHONE, TENOR	YF06601	Good	\N	JUPITER	JTS710	TX	18	Gunnar Purdy	27	\N
+2052	660	SXT	SAXOPHONE, TENOR	3847	Good	\N	JUPITER	\N	TX	16	Adam Kone	755	\N
+2031	26	TN	TROMBONE, TENOR	406896	Good	\N	YAMAHA	\N	TB	12	Marco De Vries Aguirre	502	\N
+2028	482	CLB	CLARINET, BASS	YE 69248	Good	\N	YAMAHA	Hex 1000	BCL	4	Gwendolyn Anding	1077	\N
+1632	396	VN	VIOLIN	J052107087	Good	HS MUSIC	HOFNER	\N	\N	1	\N	\N	\N
+2072	445	CL	CLARINET, B FLAT	J65342	Good	INSTRUMENT STORE	YAMAHA	\N	CL	37	\N	\N	\N
+2088	230	BD	BASS DRUM	PO-1575	Good	MS MUSIC	YAMAHA	CB628	\N	2	\N	\N	\N
+2094	440	CL	CLARINET, B FLAT	J65438	Good	\N	YAMAHA	\N	CL	32	Io Verstraete	792	\N
+2092	435	CL	CLARINET, B FLAT	074011A	Good	\N	YAMAHA	\N	CL	27	Leo Prawitz	511	\N
+2113	618	SXA	SAXOPHONE, ALTO	XF56319	Good	\N	JUPITER	JAS 710	AX	49	Barney Carver Wildig	612	\N
+1731	371	GRC	GUITAR, CLASSICAL	\N	Good	INSTRUMENT STORE	PARADISE	17	\N	17	\N	\N	\N
+1751	283	BLS	BELLS, SLEIGH	\N	Good	HS MUSIC	WEISS	\N	\N	1	\N	\N	\N
+2071	430	CL	CLARINET, B FLAT	J07292	Good	\N	YAMAHA	\N	CL	22	Kevin Keene	\N	\N
+2117	540	FL	FLUTE	XD58187	Good	\N	JUPITER	JEL 710	FL	45	Saptha Girish Bommadevara	332	\N
+2041	18	TN	TROMBONE, TENOR	406948	Good	INSTRUMENT STORE	YAMAHA	\N	TB	4	\N	\N	\N
+2114	461	CL	CLARINET, B FLAT	XE54957	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	53	\N	\N	\N
+2095	86	TP	TRUMPET, B FLAT	556107	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	6	\N	\N	\N
+2093	83	TP	TRUMPET, B FLAT	533719	Good	INSTRUMENT STORE	YAMAHA	\N	TP	3	\N	\N	\N
+2047	132	TP	TRUMPET, B FLAT	WA26516	Good	INSTRUMENT STORE	JUPITER	\N	TP	43	\N	\N	\N
+2100	594	SXA	SAXOPHONE, ALTO	XF54576	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	29	\N	\N	\N
+1996	113	TP	TRUMPET, B FLAT	F19277	Good	INSTRUMENT STORE	BLESSING	\N	TP	33	\N	\N	\N
+2006	144	TP	TRUMPET, B FLAT	488350	Good	INSTRUMENT STORE	BACH	\N	TP	55	\N	\N	\N
+2053	114	TP	TRUMPET, B FLAT	511564	Good	INSTRUMENT STORE	YAMAHA	\N	TP	34	\N	\N	\N
+2045	473	CL	CLARINET, B FLAT	YE67756	Good	MS MUSIC	JUPITER	JCL710	CL	65	\N	\N	\N
+2067	88	TP	TRUMPET, B FLAT	806725	Good	MS MUSIC	YAMAHA	YTR 2335	TP	8	\N	\N	\N
+1924	616	SXA	SAXOPHONE, ALTO	XF57296	Good	MS MUSIC	JUPITER	JAS 710	AX	47	\N	\N	\N
+1995	100	TP	TRUMPET, B FLAT	H31438	Good	MS MUSIC	BLESSING	\N	TP	20	\N	\N	\N
+2118	570	SXA	SAXOPHONE, ALTO	11110173	Good	\N	ETUDE	\N	AX	5	Lukas Norman	419	\N
+2121	649	SXT	SAXOPHONE, TENOR	31870	Good	\N	YAMAHA	\N	TX	5	Spencer Schenck	924	\N
+2119	643	SXB	SAXOPHONE, BARITONE	AF03351	Good	\N	JUPITER	JBS 1000	BX	4	Lukas Norman	419	\N
+2068	196	PE	PIANO, ELECTRIC	\N	Good	DANCE STUDIO	YAMAHA	\N	\N	8	\N	\N	\N
+2069	185	KB	KEYBOARD	913094	Good	\N	YAMAHA	PSR 220	\N	21	\N	\N	\N
+2070	186	KB	KEYBOARD	13143	Good	\N	YAMAHA	PSR 83	\N	22	\N	\N	\N
+2077	345	GRB	GUITAR, BASS	\N	Good	MS MUSIC	YAMAHA	BB1000	\N	2	\N	\N	\N
+2078	219	\N	PEDAL, SUSTAIN	\N	Good	HS MUSIC	YAMAHA	FC4	\N	7	\N	\N	\N
+2080	316	BL	BELL SET	\N	Good	HS MUSIC	YAMAHA	\N	\N	5	\N	\N	\N
+2089	377	GRC	GUITAR, CLASSICAL	\N	Good	\N	YAMAHA	40	\N	29	Keeara Walji	\N	\N
+2075	365	GRC	GUITAR, CLASSICAL	HKP064005	Good	\N	YAMAHA	40	\N	9	Finola Doherty	\N	\N
+2076	367	GRC	GUITAR, CLASSICAL	HKP054553	Good	\N	YAMAHA	40	\N	11	Marwa Baker	\N	\N
+1898	91	TP	TRUMPET, B FLAT	554189	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	11	\N	\N	\N
+1907	161	TB	TUBA	106508	Good	MS MUSIC	YAMAHA	\N	T	1	\N	\N	\N
+2062	265	DK	DRUMSET	SBB2217	Good	HS MUSIC	YAMAHA	\N	\N	4	\N	\N	\N
+1668	214	\N	HARNESS	\N	Good	MS MUSIC	PEARL	\N	\N	14	\N	\N	\N
+1669	425	CL	CLARINET, B FLAT	443788	Good	INSTRUMENT STORE	YAMAHA	\N	CL	17	\N	\N	\N
+1531	623	SXA	SAXOPHONE, ALTO	YF57320	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	54	\N	\N	2024-06-04
+1672	360	GRC	GUITAR, CLASSICAL	HKP064875	Good	\N	YAMAHA	40	\N	4	Jihong Joo	525	\N
+1670	635	SXA	SAXOPHONE, ALTO	CF57209	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	66	\N	\N	\N
+1673	17	TN	TROMBONE, TENOR	336151	Good	INSTRUMENT STORE	YAMAHA	\N	TB	3	\N	\N	\N
+1671	364	GRC	GUITAR, CLASSICAL	HKP064163	Good	MS MUSIC	YAMAHA	40	\N	8	\N	\N	\N
+2103	106	TP	TRUMPET, B FLAT	H31450	Good	\N	BLESSING	BIR 1270	TP	26	Saqer Alnaqbi	942	\N
+2106	629	SXA	SAXOPHONE, ALTO	AF53502	Good	\N	JUPITER	JAS 710	AX	60	Noga Hercberg	661	\N
+2108	592	SXA	SAXOPHONE, ALTO	XF54339	Good	\N	JUPITER	JAS 710	AX	27	Alexander Roe	36	\N
+2104	64	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	PBONE	\N	PTB	32	Seth Lundell	982	\N
+2112	124	TP	TRUMPET, B FLAT	1107571	Good	INSTRUMENT STORE	LIBRETTO	\N	TP	39	\N	\N	\N
+1577	514	FL	FLUTE	P11203	Good	INSTRUMENT STORE	GEMEINHARDT	2SP	FL	19	\N	\N	\N
+1999	454	CL	CLARINET, B FLAT	KE56526	Good	\N	JUPITER	JCL710	CL	46	Noah Ochomo	1071	\N
+1676	353	GRA	GUITAR, ACOUSTIC	00Y224884	Good	INSTRUMENT STORE	YAMAHA	F 325	\N	20	\N	\N	\N
+2034	189	PE	PIANO, ELECTRIC	GBRCKK 01006	Good	INSTRUMENT STORE	YAMAHA	CVP303x	\N	2	\N	\N	\N
+1943	294	TRT	TAMBOURINE, 10 INCH	\N	Good	INSTRUMENT STORE	PEARL	Symphonic Double Row PEA-PETM1017	\N	1	\N	\N	\N
+1545	84	TP	TRUMPET, B FLAT	H31816	Good	INSTRUMENT STORE	BLESSING	\N	TP	4	\N	\N	\N
+2110	551	FL	FLUTE	YD65954	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	57	\N	\N	\N
+2107	469	CL	CLARINET, B FLAT	YE67254	Good	INSTRUMENT STORE	JUPITER	JCL710	CL	61	\N	\N	\N
+4203	\N	DMMO	DUMMY 1	DUMMM34124JKKLDF	New	INSTRUMENT STORE	CUSTOM	\N	\N	6	\N	\N	\N
+2074	16	TN	TROMBONE, TENOR	406538	Good	MS MUSIC	YAMAHA	\N	TB	2	\N	\N	\N
+4208	\N	DMMO	DUMMY 1	DUMM19378G	New	INSTRUMENT STORE	CUSTOM	\N	\N	7	\N	\N	\N
+4209	\N	DMMO	DUMMY 1	DUMMM1234FE	New	INSTRUMENT STORE	CUSTOM	\N	\N	8	\N	\N	\N
+2129	\N	DMMO	DUMMY 1	\N	Good	INSTRUMENT STORE	DUMMY MAKER	DUMMY MODEL	\N	1	\N	\N	\N
+4164	\N	DMMO	DUMMY 1	DUMMM2	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	3	\N	\N	\N
+4165	\N	DMMO	DUMMY 1	DUMMM3	New	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	4	\N	\N	\N
+1798	401	BS	BASSOON	33CVC02	Good	INSTRUMENT STORE	UNKNOWN	\N	\N	1	\N	\N	\N
+1925	235	CST	CASTANETS	\N	Good	INSTRUMENT STORE	DANMAR	DAN-17A	\N	1	\N	\N	\N
+1710	619	SXA	SAXOPHONE, ALTO	XF56406	Good	INSTRUMENT STORE	JUPITER	JAS 710	AX	50	\N	\N	\N
+2122	21	TN	TROMBONE, TENOR	325472	Good	INSTRUMENT STORE	YAMAHA	\N	TB	7	\N	\N	\N
+2111	99	TP	TRUMPET, B FLAT	H35203	Good	INSTRUMENT STORE	BLESSING	BTR 1270	TP	19	\N	\N	\N
+2109	344	GRB	GUITAR, BASS	\N	Good	INSTRUMENT STORE	ARCHER	\N	\N	1	\N	\N	\N
+1833	553	FL	FLUTE	BD63526	Good	INSTRUMENT STORE	JUPITER	JEL 710	FL	59	\N	\N	2024-06-04
+1891	486	FL	FLUTE	600365	Good	\N	YAMAHA	\N	FL	3	Eliana Hodge	945	2024-06-04
+2060	610	SXA	SAXOPHONE, ALTO	XF54140	Good	\N	JUPITER	JAS 710	AX	41	Lucile Bamlango	176	2024-06-04
+1522	155	TP	TRUMPET, B FLAT	CA15052	Good	\N	JUPITER	JTR 700	TP	66	Mikael Eshetu	935	2024-06-04
+1806	483	CLB	CLARINET, BASS	CE69047	Good	\N	JUPITER	JBC 1000	BCL	5	Moussa Sangare	929	2024-06-04
+1790	613	SXA	SAXOPHONE, ALTO	XF56401	Good	\N	JUPITER	JAS 710	AX	44	Nirvi Joymungul	984	2024-06-04
+2105	66	TNTP	TROMBONE, TENOR - PLASTIC	\N	Good	\N	PBONE	\N	PTB	34	Sadie Szuchman	846	2024-06-04
+2116	2	BH	BARITONE/EUPHONIUM	770765	Good	\N	BESSON	Soveriegn 968	BH	3	Saqer Alnaqbi	942	2024-06-04
+2115	548	FL	FLUTE	YD66080	Good	\N	JUPITER	JEL 710	FL	54	Seya Chandaria	926	2024-06-04
+2050	535	FL	FLUTE	WD62108	Good	\N	JUPITER	JEL 710	FL	40	Yoonseo Choi	953	2024-06-04
+1809	622	SXA	SAXOPHONE, ALTO	YF57624	Good	\N	JUPITER	JAS 710	AX	53	Gakenia Mucharie	1075	2024-06-04
+1906	651	SXT	SAXOPHONE, TENOR	10355	Good	INSTRUMENT STORE	YAMAHA	\N	TX	7	\N	\N	\N
+1818	243	CG	CONGA	\N	Good	INSTRUMENT STORE	MEINL	HEADLINER RANGE	\N	2	\N	\N	\N
+1873	242	CG	CONGA	\N	Good	INSTRUMENT STORE	YAMAHA	Red 14 inch	\N	1	\N	\N	\N
+1856	87	TP	TRUMPET, B FLAT	638871	Good	INSTRUMENT STORE	YAMAHA	YTR 2335	TP	7	\N	\N	\N
+1496	94	TP	TRUMPET, B FLAT	L306677	Good	INSTRUMENT STORE	BACH	Stradivarius 37L	TP	14	\N	\N	\N
+4163	\N	DMMO	DUMMY 1	DUMMM1	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	2	\N	\N	\N
 \.
 
 
 --
--- TOC entry 3930 (class 0 OID 23612)
--- Dependencies: 216
+-- TOC entry 3954 (class 0 OID 30978)
+-- Dependencies: 250
 -- Data for Name: legacy_database; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3252,8 +2518,8 @@ COPY public.legacy_database (id, number, legacy_number, family, equipment, make,
 
 
 --
--- TOC entry 3961 (class 0 OID 24727)
--- Dependencies: 247
+-- TOC entry 3956 (class 0 OID 30986)
+-- Dependencies: 252
 -- Data for Name: locations; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3276,8 +2542,18 @@ DRUM ROOM 1	16
 
 
 --
--- TOC entry 3956 (class 0 OID 24646)
--- Dependencies: 242
+-- TOC entry 3934 (class 0 OID 30734)
+-- Dependencies: 225
+-- Data for Name: lost_and_found; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.lost_and_found (id, item_id, finder_name, date, location, contact) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3958 (class 0 OID 30992)
+-- Dependencies: 254
 -- Data for Name: music_instruments; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3604,33 +2880,18 @@ COPY public.music_instruments (id, family, description, legacy_code, code, notes
 
 
 --
--- TOC entry 3964 (class 0 OID 24850)
--- Dependencies: 250
+-- TOC entry 3960 (class 0 OID 30999)
+-- Dependencies: 256
 -- Data for Name: new_instrument; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.new_instrument (id, legacy_number, code, description, serial, state, location, make, model, legacy_code, number, user_name, user_id) FROM stdin;
-3	\N	\N	DUMMY 1	DUMMM1	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	\N	\N	\N
-8	\N	\N	DUMMY 1	DUMMM1	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	\N	\N	\N
-9	\N	\N	DUMMY 1	DUMMM2	Good	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	\N	\N	\N
-10	\N	\N	DUMMY 1	DUMMM3	\N	INSTRUMENT STORE	DUMMY MAKER	DUMDUM	\N	\N	\N	\N
-11	\N	\N	DUMMY 1	DUMMM4	\N	INSTRUMENT STORE	DUMMY MAKER	\N	\N	\N	\N	\N
+COPY public.new_instrument (id, description, serial, state, make, model, number, profile_id, username, location) FROM stdin;
 \.
 
 
 --
--- TOC entry 3966 (class 0 OID 25128)
--- Dependencies: 254
--- Data for Name: receive_instrument; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.receive_instrument (id, created_by_id, instrument_id, room) FROM stdin;
-\.
-
-
---
--- TOC entry 3944 (class 0 OID 24313)
--- Dependencies: 230
+-- TOC entry 3936 (class 0 OID 30741)
+-- Dependencies: 227
 -- Data for Name: repair_request; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3639,18 +2900,8 @@ COPY public.repair_request (id, created_at, item_id, complaint) FROM stdin;
 
 
 --
--- TOC entry 3948 (class 0 OID 24341)
--- Dependencies: 234
--- Data for Name: requests; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.requests (id, created_at, teacher_id, instrument, quantity) FROM stdin;
-\.
-
-
---
--- TOC entry 3946 (class 0 OID 24327)
--- Dependencies: 232
+-- TOC entry 3938 (class 0 OID 30748)
+-- Dependencies: 229
 -- Data for Name: resolve; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3659,98 +2910,24 @@ COPY public.resolve (id, created_at, "case", notes) FROM stdin;
 
 
 --
--- TOC entry 3942 (class 0 OID 24301)
--- Dependencies: 228
+-- TOC entry 3940 (class 0 OID 30755)
+-- Dependencies: 231
 -- Data for Name: returns; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.returns (id, created_at, item_id, created_by) FROM stdin;
-6	2024-01-31	2129	\N
-8	2024-01-31	2129	\N
-9	2024-01-31	2129	\N
-11	2024-01-31	2129	\N
-12	2024-01-31	1494	\N
-13	2024-01-31	1494	\N
-14	2024-02-01	2129	\N
-15	2024-02-01	2129	postgres
-16	2024-02-01	1731	postgres
-17	2024-02-01	1768	postgres
-18	2024-02-01	2072	postgres
-19	2024-02-01	1595	postgres
-20	2024-02-01	1618	postgres
-21	2024-02-01	2072	postgres
-22	2024-02-01	2072	postgres
-23	2024-02-01	1768	postgres
-24	2024-02-01	1618	postgres
-25	2024-02-01	1731	postgres
-26	2024-02-01	1595	postgres
-27	2024-02-15	4166	nochomo
-29	2024-02-23	4166	postgres
-30	2024-02-23	2129	postgres
-31	2024-02-23	2129	postgres
-32	2024-02-23	4166	postgres
-33	2024-02-23	4166	postgres
-34	2024-02-23	4166	postgres
-35	2024-02-23	4166	postgres
-36	2024-02-23	4166	postgres
-37	2024-02-23	4166	postgres
-38	2024-02-23	4166	postgres
-39	2024-02-23	4166	postgres
-40	2024-02-23	4166	postgres
-41	2024-02-23	4166	postgres
-42	2024-02-23	4166	nochomo
-43	2024-02-23	4166	nochomo
-44	2024-02-23	4166	nochomo
-45	2024-02-23	4166	nochomo
-46	2024-02-25	4166	nochomo
-47	2024-02-25	4166	nochomo
-48	2024-02-25	4166	nochomo
-49	2024-02-25	4166	nochomo
-50	2024-02-25	4166	nochomo
-51	2024-02-25	4166	nochomo
-61	2024-02-28	4166	nochomo
-62	2024-02-28	4166	nochomo
-63	2024-02-28	4166	nochomo
-64	2024-03-01	4166	nochomo
-65	2024-03-01	4166	nochomo
-66	2024-03-01	4166	nochomo
-67	2024-03-01	4166	nochomo
-68	2024-03-01	4166	nochomo
-69	2024-03-02	4166	nochomo
-70	2024-03-03	4166	nochomo
-71	2024-03-03	4166	nochomo
-72	2024-03-03	2129	nochomo
-73	2024-03-03	4164	nochomo
-74	2024-03-03	4165	nochomo
-75	2024-03-03	4166	nochomo
-76	2024-03-03	1757	nochomo
-77	2024-03-03	1566	nochomo
-78	2024-03-03	2098	nochomo
-79	2024-03-04	4164	nochomo
-80	2024-03-04	4163	nochomo
-81	2024-03-04	4164	nochomo
-82	2024-03-04	4166	nochomo
-83	2024-03-04	4165	nochomo
-84	2024-03-04	4164	nochomo
-85	2024-03-04	4166	nochomo
-86	2024-03-04	4163	nochomo
-87	2024-03-04	4165	nochomo
-88	2024-03-04	4166	nochomo
-89	2024-03-04	4163	nochomo
-90	2024-03-04	2129	nochomo
-91	2024-03-06	4166	nochomo
-92	2024-03-06	4166	nochomo
-93	2024-03-06	4166	nochomo
-95	2024-03-07	4165	nochomo
-96	2024-03-07	4166	nochomo
-97	2024-03-07	4166	nochomo
-98	2024-03-07	4165	nochomo
+COPY public.returns (id, created_at, item_id, created_by, user_id, former_user_id) FROM stdin;
+304	2024-06-07	1906	kwando	1082	1071
+305	2024-06-07	1818	kwando	1082	1071
+306	2024-06-07	1873	kwando	1082	1071
+307	2024-06-07	1856	kwando	1082	1071
+308	2024-06-07	1496	kwando	1082	1071
+309	2024-06-24	4163	nochomo	1071	1074
 \.
 
 
 --
--- TOC entry 3934 (class 0 OID 24238)
--- Dependencies: 220
+-- TOC entry 3942 (class 0 OID 30762)
+-- Dependencies: 233
 -- Data for Name: roles; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -3759,15 +2936,16 @@ COPY public.roles (id, role_name) FROM stdin;
 5	MUSIC TEACHER
 6	INVENTORY MANAGER
 7	COMMUNITY
-8	ADMIN
 10	MUSIC TA
 11	SUBSTITUTE
+8	ADMINISTRATOR
+12	TEACHER
 \.
 
 
 --
--- TOC entry 3952 (class 0 OID 24383)
--- Dependencies: 238
+-- TOC entry 3948 (class 0 OID 30937)
+-- Dependencies: 240
 -- Data for Name: students; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -4714,6 +3892,7 @@ COPY public.students (id, student_number, last_name, first_name, grade_level, pa
 139	11096	Tanna	Kush	6	vptanna@gmail.com	priyentanna@gmail.com	MS	Beginning Band 8 - 2023	ktanna30@isk.ac.ke
 442	12909	Alnaqbi	Saqer	6	emaraty_a99@hotmail.com	emaraty353@hotmail.com	MS	Beginning Band 8 - 2023	salnaqbi30@isk.ac.ke
 176	10812	Mcmurtry	Jack	6	karenpoore77@yahoo.co.uk	seanmcmurtry7@gmail.com	MS	Beginning Band 8 - 2023	jmcmurtry30@isk.ac.ke
+984	12913	Bergqvist	Bella	6	moa.m.bergqvist@gmail.com	jbergqvist@hotmail.com	MS	\N	\N
 928	12500	D'souza	Aiden	6	lizannec@hotmail.com	royden.dsouza@gmail.com	MS	Beginning Band 8 - 2023	adsouza30@isk.ac.ke
 12	12193	Hodge	Eliana	7	janderson12@worldbank.org	jhodge1@worldbank.org	MS	Concert Band 2023	ehodge29@isk.ac.ke
 640	11463	Dokunmu	Abdul-Lateef Boluwatife (Bolu)	7	JJAGUN@GMAIL.COM	\N	MS	Beginning Band 7 2023	adokunmu29@isk.ac.ke
@@ -4768,7 +3947,6 @@ COPY public.students (id, student_number, last_name, first_name, grade_level, pa
 981	12327	Johnson	Adam	5	ameenahbsaleem@gmail.com	ibnabu@aol.com	ES	\N	\N
 982	12692	Lundell	Elijah	5	rebekahlundell@gmail.com	redlundell@gmail.com	ES	\N	\N
 983	12700	Mpatswe	Johannah	5	olivia.mutambo19@gmail.com	gkmpatswe@gmail.com	ES	\N	\N
-984	12913	Bergqvist	Bella	6	moa.m.bergqvist@gmail.com	jbergqvist@hotmail.com	MS	\N	\N
 985	12699	Birk	Bertram	6	gerbir@um.dk	thobirk@gmail.com	MS	\N	\N
 987	12923	Carey	Elijah	6	twilford98@yahoo.com	scarey192003@yahoo.com	MS	\N	\N
 997	12618	Ryan	Eva	6	jemichler@gmail.com	dpryan999@gmail.com	MS	\N	\N
@@ -4845,1107 +4023,1107 @@ COPY public.students (id, student_number, last_name, first_name, grade_level, pa
 
 
 --
--- TOC entry 3936 (class 0 OID 24250)
--- Dependencies: 222
+-- TOC entry 3947 (class 0 OID 30926)
+-- Dependencies: 238
 -- Data for Name: users; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.users (id, first_name, last_name, email, role, number, grade_level, division, room, username) FROM stdin;
-59	Vilma Doret	Rosen	vrosen30@isk.ac.ke	STUDENT	11763	6	MS	\N	vrosen30
-60	Elizabeth	Gardner	egardner29@isk.ac.ke	STUDENT	11467	7	MS	\N	egardner29
-61	Shai	Bedein	sbedein29@isk.ac.ke	STUDENT	12614	7	MS	\N	sbedein29
-114	Maartje	Stott	mstott30@isk.ac.ke	STUDENT	12519	6	MS	\N	mstott30
-115	Owen	Harris	oharris30@isk.ac.ke	STUDENT	12609	6	MS	\N	oharris30
-116	Alexander	Mogilnicki	amogilnicki29@isk.ac.ke	STUDENT	11480	7	MS	\N	amogilnicki29
-117	Cahir	Patel	cpatel29@isk.ac.ke	STUDENT	10772	7	MS	\N	cpatel29
-118	Ehsan	Akuete	eakuete28@isk.ac.ke	STUDENT	12156	8	MS	\N	eakuete28
-176	Lucile	Bamlango	lbamlango30@isk.ac.ke	STUDENT	10977	6	MS	\N	lbamlango30
-177	Tawheed	Hussain	thussain30@isk.ac.ke	STUDENT	11469	6	MS	\N	thussain30
-178	Florencia	Anding	fanding28@isk.ac.ke	STUDENT	10967	8	MS	\N	fanding28
-179	Tobias	Godfrey	tgodfrey29@isk.ac.ke	STUDENT	11227	7	MS	\N	tgodfrey29
-239	Stefanie	Landolt	slandolt30@isk.ac.ke	STUDENT	12286	6	MS	\N	slandolt30
-240	Arhum	Bid	abid30@isk.ac.ke	STUDENT	11706	6	MS	\N	abid30
-241	Hawi	Okwany	hokwany29@isk.ac.ke	STUDENT	10696	7	MS	\N	hokwany29
-298	Ayana	Butt	abutt30@isk.ac.ke	STUDENT	11402	6	MS	\N	abutt30
-299	Connor	Fort	cfort30@isk.ac.ke	STUDENT	11650	6	MS	\N	cfort30
-300	Ochieng	Simbiri	osimbiri30@isk.ac.ke	STUDENT	11265	6	MS	\N	osimbiri30
-301	Fatuma	Tall	ftall28@isk.ac.ke	STUDENT	11515	8	MS	\N	ftall28
-302	Jana	Landolt	jlandolt28@isk.ac.ke	STUDENT	12285	8	MS	\N	jlandolt28
-356	Anaiya	Shah	ashah30@isk.ac.ke	STUDENT	11264	6	MS	\N	ashah30
-357	Lilyrose	Trottier	ltrottier30@isk.ac.ke	STUDENT	11944	6	MS	\N	ltrottier30
-358	Lorian	Inglis	linglis30@isk.ac.ke	STUDENT	12133	6	MS	\N	linglis30
-359	Anne	Bamlango	abamlango28@isk.ac.ke	STUDENT	10978	8	MS	\N	abamlango28
-360	Arjan	Arora	aarora28@isk.ac.ke>	STUDENT	12130	8	MS	\N	aarora28
-361	Naomi	Yohannes	nyohannes29@isk.ac.ke	STUDENT	10787	7	MS	\N	nyohannes29
-421	Phuc Anh	Nguyen	pnguyen30@isk.ac.ke	STUDENT	11260	6	MS	\N	pnguyen30
-422	Aiden	Gremley	agremley29@isk.ac.ke	STUDENT	12393	7	MS	\N	agremley29
-1082	Kennedy	Wando	kwando@isk.ac.ke	INVENTORY MANAGER	\N	\N	\N	INSTRUMENT STORE	kwando
-480	Kai	O'Bra	kobra30@isk.ac.ke	STUDENT	12342	6	MS	\N	kobra30
-481	Luke	O'Hara	lohara30@isk.ac.ke	STUDENT	12063	6	MS	\N	lohara30
-482	Ansh	Mehta	amehta29@isk.ac.ke	STUDENT	10657	7	MS	\N	amehta29
-483	Isla	Goold	igoold28@isk.ac.ke	STUDENT	11836	8	MS	\N	igoold28
-538	Zecarun	Caminha	zcaminha30@isk.ac.ke	STUDENT	12081	6	MS	\N	zcaminha30
-539	Fatima	Zucca	fazucca30@isk.ac.ke	STUDENT	10566	6	MS	\N	fazucca30
-540	Grace	Njenga	gnjenga29@isk.ac.ke	STUDENT	12280	7	MS	\N	gnjenga29
-541	Natéa	Firzé Al Ghaoui	nfirzealghaoui29@isk.ac.ke	STUDENT	12190	7	MS	\N	nfirzealghaoui29
-601	Olivia	Patel	opatel30@isk.ac.ke	STUDENT	10561	6	MS	\N	opatel30
-602	Naia	Friedhoff Jaeschke	nfriedhoffjaeschke29@isk.ac.ke	STUDENT	11822	7	MS	\N	nfriedhoffjaeschke29
-659	Emilie	Wittmann	ewittmann30@isk.ac.ke	STUDENT	12428	6	MS	\N	ewittmann30
-660	Reehan	Reza	rreza30@isk.ac.ke	STUDENT	13022	6	MS	\N	rreza30
-661	Noga	Hercberg	nhercberg30@isk.ac.ke	STUDENT	12681	6	MS	\N	nhercberg30
-662	Emiel	Ghelani-Decorte	eghelani-decorte29@isk.ac.ke	STUDENT	12674	7	MS	\N	eghelani-decorte29
-663	Georgia	Dove	gdove30@isk.ac.ke	STUDENT	12922	6	MS	\N	gdove30
-725	Dongyoon	Lee	dlee30@isk.ac.ke	STUDENT	12627	6	MS	\N	dlee30
-787	Masoud	Ibrahim	mibrahim30@isk.ac.ke	STUDENT	13076	6	MS	\N	mibrahim30
-788	Titu	Tulga	ttulga30@isk.ac.ke	STUDENT	12756	6	MS	\N	ttulga30
-845	Harsha	Varun	hvarun30@isk.ac.ke	STUDENT	12683	6	MS	\N	hvarun30
-846	Sadie	Szuchman	sszuchman30@isk.ac.ke	STUDENT	12668	6	MS	\N	sszuchman30
-847	Maria	Agenorwot	magenorwot28@isk.ac.ke	STUDENT	13018	8	MS	\N	magenorwot28
-848	Reuben	Szuchman	rszuchman28@isk.ac.ke	STUDENT	12667	8	MS	\N	rszuchman28
-929	Moussa	Sangare	msangare30@isk.ac.ke	STUDENT	12427	6	MS	\N	msangare30
-930	Leo	Jansson	ljansson30@isk.ac.ke	STUDENT	11762	6	MS	\N	ljansson30
-931	Nora	Saleem	nsaleem30@isk.ac.ke	STUDENT	12619	6	MS	\N	nsaleem30
-932	Kaisei	Stephens	kstephens30@isk.ac.ke	STUDENT	11804	6	MS	\N	kstephens30
-933	Olivia	Freiin Von Handel	ovonhandel30@isk.ac.ke	STUDENT	12096	6	MS	\N	ovonhandel30
-934	Kiara	Materne	kmaterne30@isk.ac.ke	STUDENT	12152	6	MS	\N	kmaterne30
-935	Mikael	Eshetu	meshetu30@isk.ac.ke	STUDENT	12689	6	MS	\N	meshetu30
-936	Ignacio	Biafore	ibiafore30@isk.ac.ke	STUDENT	12170	6	MS	\N	ibiafore30
-937	Romilly	Haysmith	rhaysmith30@isk.ac.ke	STUDENT	12976	6	MS	\N	rhaysmith30
-938	Alexander	Wietecha	awietecha30@isk.ac.ke	STUDENT	12725	6	MS	\N	awietecha30
-939	Julian	Dibling	jdibling30@isk.ac.ke	STUDENT	12883	6	MS	\N	jdibling30
-940	Gaia	Bonde-Nielsen	gbondenielsen30@isk.ac.ke	STUDENT	12537	6	MS	\N	gbondenielsen30
-941	Kush	Tanna	ktanna30@isk.ac.ke	STUDENT	11096	6	MS	\N	ktanna30
-942	Saqer	Alnaqbi	salnaqbi30@isk.ac.ke	STUDENT	12909	6	MS	\N	salnaqbi30
-943	Jack	Mcmurtry	jmcmurtry30@isk.ac.ke	STUDENT	10812	6	MS	\N	jmcmurtry30
-944	Aiden	D'Souza	adsouza30@isk.ac.ke	STUDENT	12500	6	MS	\N	adsouza30
-945	Eliana	Hodge	ehodge29@isk.ac.ke	STUDENT	12193	7	MS	\N	ehodge29
-946	Abdul-Lateef Boluwatife (Bolu)	Dokunmu	adokunmu29@isk.ac.ke	STUDENT	11463	7	MS	\N	adokunmu29
-947	Anaiya	Khubchandani	akhubchandani30@isk.ac.ke	STUDENT	11262	6	MS	\N	akhubchandani30
-948	Ariel	Mutombo	amutombo30@isk.ac.ke	STUDENT	12549	6	MS	\N	amutombo30
-949	Edie	Cutler	ecutler30@isk.ac.ke	STUDENT	10686	6	MS	\N	ecutler30
-950	Eugénie	Camisa	ecamisa30@isk.ac.ke	STUDENT	11883	6	MS	\N	ecamisa30
-32	Cheryl	Cole	\N	STUDENT	12497	12	HS	\N	\N
-951	Finlay	Haswell	fhaswell30@isk.ac.ke	STUDENT	10562	6	MS	\N	fhaswell30
-1081	Nellie	Odera	\nnodera.sub@isk.ac.ke	SUBSTITUTE	\N	\N	\N	\N	\nnodera.sub
-18	Hugo	Ashton	\N	STUDENT	11902	6	MS	\N	\N
-33	Oria	Bunbury	\N	STUDENT	12247	K	ES	\N	\N
-625	Ruth	Dove	\N	STUDENT	12921	9	HS	\N	\N
-34	Dawon	Eom	\N	STUDENT	12733	10	HS	\N	\N
-35	Arnav	Mohan	\N	STUDENT	11925	12	HS	\N	\N
-36	Alexander	Roe	\N	STUDENT	12188	7	MS	\N	\N
-37	Elizabeth	Roe	\N	STUDENT	12186	9	HS	\N	\N
-38	Freja	Lindvig	\N	STUDENT	12535	5	ES	\N	\N
-39	Hana	Linck	\N	STUDENT	12559	12	HS	\N	\N
-40	Sif	Lindvig	\N	STUDENT	12502	8	MS	\N	\N
-41	Mimer	Lindvig	\N	STUDENT	12503	10	HS	\N	\N
-42	Frida	Weurlander	\N	STUDENT	12440	4	ES	\N	\N
-43	Zahra	Singh	\N	STUDENT	11505	9	HS	\N	\N
-44	Dylan	Zhang	\N	STUDENT	12206	1	ES	\N	\N
-45	Carys	Aubrey	\N	STUDENT	11838	8	MS	\N	\N
-46	Evie	Aubrey	\N	STUDENT	10950	12	HS	\N	\N
-47	Raeed	Mahmud	\N	STUDENT	11910	12	HS	\N	\N
-48	Kaleb	Mekonnen	\N	STUDENT	11185	5	ES	\N	\N
-49	Yonathan	Mekonnen	\N	STUDENT	11015	7	MS	\N	\N
-50	Aya	Mathers	\N	STUDENT	11793	4	ES	\N	\N
-51	Yui	Mathers	\N	STUDENT	11110	8	MS	\N	\N
-52	Madeleine	Gardner	\N	STUDENT	11468	5	ES	\N	\N
-53	Sofia	Russo	\N	STUDENT	11362	4	ES	\N	\N
-54	Leandro	Russo	\N	STUDENT	11361	8	MS	\N	\N
-55	Gerald	Murathi	\N	STUDENT	11724	4	ES	\N	\N
-56	Megan	Murathi	\N	STUDENT	11735	7	MS	\N	\N
-57	Eunice	Murathi	\N	STUDENT	11736	11	HS	\N	\N
-58	Abby Angelica	Manzano	\N	STUDENT	11479	7	MS	\N	\N
-62	Or	Alemu	\N	STUDENT	13005	K	ES	\N	\N
-63	Lillia	Bellamy	\N	STUDENT	11942	3	ES	\N	\N
-64	Destiny	Ouma	\N	STUDENT	10319	8	MS	\N	\N
-65	Louis	Ronzio	\N	STUDENT	12197	3	ES	\N	\N
-66	George	Ronzio	\N	STUDENT	12199	7	MS	\N	\N
-67	Andre	Awori	\N	STUDENT	24068	12	HS	\N	\N
-68	Krishi	Shah	\N	STUDENT	12121	10	HS	\N	\N
-69	Isabella	Fisher	\N	STUDENT	11416	9	HS	\N	\N
-70	Charles	Fisher	\N	STUDENT	11415	11	HS	\N	\N
-71	Joy	Mwangi	\N	STUDENT	10557	12	HS	\N	\N
-72	Hassan	Akuete	\N	STUDENT	11985	10	HS	\N	\N
-73	Leul	Alemu	\N	STUDENT	13004	5	ES	\N	\N
-74	Lisa	Otterstedt	\N	STUDENT	12336	12	HS	\N	\N
-75	Helena	Stott	\N	STUDENT	12520	9	HS	\N	\N
-76	Patrick	Stott	\N	STUDENT	12521	10	HS	\N	\N
-77	Isla	Kimani	\N	STUDENT	12397	K	ES	\N	\N
-78	Christodoulos	Van De Velden	\N	STUDENT	11788	3	ES	\N	\N
-79	Evangelia	Van De Velden	\N	STUDENT	10704	7	MS	\N	\N
-80	Sofia	Todd	\N	STUDENT	11731	2	ES	\N	\N
-81	Dominik	Mogilnicki	\N	STUDENT	11481	5	ES	\N	\N
-82	Kieran	Echalar	\N	STUDENT	12723	1	ES	\N	\N
-83	Liam	Echalar	\N	STUDENT	11882	4	ES	\N	\N
-84	Nova	Wilkes	\N	STUDENT	12750	PK	ES	\N	\N
-85	Maximilian	Freiherr Von Handel	\N	STUDENT	12095	11	HS	\N	\N
-86	Lucas	Lopez Abella	\N	STUDENT	11759	3	ES	\N	\N
-87	Mara	Lopez Abella	\N	STUDENT	11819	5	ES	\N	\N
-88	Cassius	Miller	\N	STUDENT	27007	9	HS	\N	\N
-89	Albert	Miller	\N	STUDENT	25051	11	HS	\N	\N
-90	Axel	Rose	\N	STUDENT	12753	PK	ES	\N	\N
-91	Evelyn	James	\N	STUDENT	10843	5	ES	\N	\N
-92	Ellis	Sudra	\N	STUDENT	11941	1	ES	\N	\N
-93	Arav	Shah	\N	STUDENT	10784	7	MS	\N	\N
-94	Lucia	Thornton	\N	STUDENT	12993	5	ES	\N	\N
-95	Robert	Thornton	\N	STUDENT	12992	7	MS	\N	\N
-96	Jeongu	Yun	\N	STUDENT	12492	2	ES	\N	\N
-97	Geonu	Yun	\N	STUDENT	12487	3	ES	\N	\N
-98	David	Carter	\N	STUDENT	11937	8	MS	\N	\N
-99	Gabrielle	Willis	\N	STUDENT	12970	5	ES	\N	\N
-100	Julian	Schmidlin Guerrero	\N	STUDENT	11803	5	ES	\N	\N
-101	Malaika	Awori	\N	STUDENT	10476	8	MS	\N	\N
-102	Aarav	Sagar	\N	STUDENT	12248	1	ES	\N	\N
-103	Indira	Sheridan	\N	STUDENT	11592	10	HS	\N	\N
-104	Erika	Sheridan	\N	STUDENT	11591	12	HS	\N	\N
-105	Téa	Andries-Munshi	\N	STUDENT	12798	K	ES	\N	\N
-106	Zaha	Andries-Munshi	\N	STUDENT	12788	3	ES	\N	\N
-107	Samir	Wallbridge	\N	STUDENT	10841	5	ES	\N	\N
-108	Lylah	Wallbridge	\N	STUDENT	20867	8	MS	\N	\N
-109	Oscar	Ansell	\N	STUDENT	12134	9	HS	\N	\N
-110	Louise	Ansell	\N	STUDENT	11852	10	HS	\N	\N
-111	Omar	Harris Ii	\N	STUDENT	12625	11	HS	\N	\N
-112	Boele	Hissink	\N	STUDENT	11003	5	ES	\N	\N
-113	Pomeline	Hissink	\N	STUDENT	10683	7	MS	\N	\N
-119	Ismail	Liban	\N	STUDENT	11647	7	MS	\N	\N
-120	Shreya	Tanna	\N	STUDENT	10703	8	MS	\N	\N
-121	Samuel	Clark	\N	STUDENT	13049	4	ES	\N	\N
-122	Ohad	Yarkoni	\N	STUDENT	12167	3	ES	\N	\N
-123	Matan	Yarkoni	\N	STUDENT	12168	5	ES	\N	\N
-124	Itay	Yarkoni	\N	STUDENT	12169	8	MS	\N	\N
-125	Yen	Nguyen	\N	STUDENT	11672	7	MS	\N	\N
-126	Binh	Nguyen	\N	STUDENT	11671	9	HS	\N	\N
-127	Shams	Hussain	\N	STUDENT	11496	3	ES	\N	\N
-128	Salam	Hussain	\N	STUDENT	11495	4	ES	\N	\N
-129	Basile	Pozzi	\N	STUDENT	10275	12	HS	\N	\N
-130	Ibrahim	Ibrahim	\N	STUDENT	11666	12	HS	\N	\N
-131	Mateo	Lopez Salazar	\N	STUDENT	12752	K	ES	\N	\N
-132	Benjamin	Godfrey	\N	STUDENT	11242	5	ES	\N	\N
-133	Jamal	Sana	\N	STUDENT	11525	11	HS	\N	\N
-134	Saba	Feizzadeh	\N	STUDENT	12872	4	ES	\N	\N
-135	Kasra	Feizzadeh	\N	STUDENT	12871	9	HS	\N	\N
-136	Kayla	Fazal	\N	STUDENT	12201	6	MS	\N	\N
-137	Alyssia	Fazal	\N	STUDENT	11878	8	MS	\N	\N
-138	Chloe	Foster	\N	STUDENT	11530	11	HS	\N	\N
-139	Joyous	Miyanue	\N	STUDENT	11582	10	HS	\N	\N
-140	Marvelous Peace	Nkahnue	\N	STUDENT	11583	12	HS	\N	\N
-141	Rafaelle	Patella Ross	\N	STUDENT	10707	7	MS	\N	\N
-142	Juna	Patella Ross	\N	STUDENT	10617	10	HS	\N	\N
-143	Tyler	Good	\N	STUDENT	12879	4	ES	\N	\N
-144	Julia	Good	\N	STUDENT	12878	8	MS	\N	\N
-145	Maria-Antonina (Jay)	Biesiada	\N	STUDENT	11723	10	HS	\N	\N
-146	Ben	Nannes	\N	STUDENT	10980	9	HS	\N	\N
-147	Kaiam	Hajee	\N	STUDENT	11520	5	ES	\N	\N
-148	Kadin	Hajee	\N	STUDENT	11542	7	MS	\N	\N
-149	Kahara	Hajee	\N	STUDENT	11541	8	MS	\N	\N
-150	Maria	Gebremedhin	\N	STUDENT	10688	6	MS	\N	\N
-151	Rainey	Copeland	\N	STUDENT	12003	12	HS	\N	\N
-152	Zawadi	Ndinguri	\N	STUDENT	11936	5	ES	\N	\N
-153	Max	De Jong	\N	STUDENT	24001	11	HS	\N	\N
-154	Maximiliano	Davis - Arana	\N	STUDENT	12372	1	ES	\N	\N
-155	Emilia	Nicolau Meganck	\N	STUDENT	12797	K	ES	\N	\N
-156	Zane	Anding	\N	STUDENT	10968	11	HS	\N	\N
-157	Otis	Rogers	\N	STUDENT	11940	1	ES	\N	\N
-158	Liam	Rogers	\N	STUDENT	12744	PK	ES	\N	\N
-159	Teagan	Wood	\N	STUDENT	10972	9	HS	\N	\N
-160	Caitlin	Wood	\N	STUDENT	10934	11	HS	\N	\N
-161	Anusha	Masrani	\N	STUDENT	10632	8	MS	\N	\N
-162	Jin	Handa	\N	STUDENT	10641	10	HS	\N	\N
-163	Lina	Fest	\N	STUDENT	10279	11	HS	\N	\N
-164	Marie	Fest	\N	STUDENT	10278	11	HS	\N	\N
-165	Divyaan	Ramrakha	\N	STUDENT	11830	7	MS	\N	\N
-166	Niyam	Ramrakha	\N	STUDENT	11379	10	HS	\N	\N
-167	Akeyo	Jayaram	\N	STUDENT	11404	3	ES	\N	\N
-168	Gendhis	Sapta	\N	STUDENT	10320	8	MS	\N	\N
-169	Kianna	Venkataya	\N	STUDENT	12706	4	ES	\N	\N
-170	Taegan	Line	\N	STUDENT	11627	7	MS	\N	\N
-171	Bronwyn	Line	\N	STUDENT	11626	9	HS	\N	\N
-172	Jamison	Line	\N	STUDENT	11625	11	HS	\N	\N
-173	Tangaaza	Mujuni	\N	STUDENT	10788	7	MS	\N	\N
-174	Rugaba	Mujuni	\N	STUDENT	20828	10	HS	\N	\N
-175	Laia	Guyard Suengas	\N	STUDENT	20805	11	HS	\N	\N
-180	Zeeon	Ahmed	\N	STUDENT	11570	12	HS	\N	\N
-181	Emily	Haswell	\N	STUDENT	27066	8	MS	\N	\N
-182	Yago	Dalla Vedova Sanjuan	\N	STUDENT	12444	12	HS	\N	\N
-183	Ariana	Choda	\N	STUDENT	10973	10	HS	\N	\N
-184	Isabella	Schmid	\N	STUDENT	10974	11	HS	\N	\N
-185	Sophia	Schmid	\N	STUDENT	10975	11	HS	\N	\N
-186	Kai	Ernst	\N	STUDENT	13043	K	ES	\N	\N
-187	Aika	Ernst	\N	STUDENT	11628	3	ES	\N	\N
-188	Amira	Varga	\N	STUDENT	11705	5	ES	\N	\N
-189	Jonah	Veverka	\N	STUDENT	12835	K	ES	\N	\N
-190	Theocles	Veverka	\N	STUDENT	12838	2	ES	\N	\N
-191	Adam-Angelo	Sankoh	\N	STUDENT	12441	3	ES	\N	\N
-192	Mwende	Mittelstadt	\N	STUDENT	11098	10	HS	\N	\N
-193	Miles	Charette	\N	STUDENT	20780	9	HS	\N	\N
-194	Tea	Charette	\N	STUDENT	20781	12	HS	\N	\N
-195	Drew (Tilly)	Giblin	\N	STUDENT	12963	2	ES	\N	\N
-196	Auberlin (Addie)	Giblin	\N	STUDENT	12964	7	MS	\N	\N
-197	Ryan	Burns	\N	STUDENT	11199	12	HS	\N	\N
-198	Bella	Jama	\N	STUDENT	12457	1	ES	\N	\N
-199	Ari	Jama	\N	STUDENT	12452	3	ES	\N	\N
-200	Isaiah	Marriott	\N	STUDENT	11572	12	HS	\N	\N
-201	Sianna	Byrne-Ilako	\N	STUDENT	11751	11	HS	\N	\N
-202	Camden	Teel	\N	STUDENT	12360	4	ES	\N	\N
-203	Jaidyn	Teel	\N	STUDENT	12361	6	MS	\N	\N
-204	Lukas	Eshetu	\N	STUDENT	12793	9	HS	\N	\N
-205	Dylan	Okanda	\N	STUDENT	11511	9	HS	\N	\N
-206	Sasha	Blaschke	\N	STUDENT	11599	4	ES	\N	\N
-207	Kaitlyn	Blaschke	\N	STUDENT	11052	6	MS	\N	\N
-208	Georges	Marin Fonseca Choucair Ramos	\N	STUDENT	12789	3	ES	\N	\N
-209	Maaya	Kobayashi	\N	STUDENT	11575	5	ES	\N	\N
-210	Isabel	Hansen Meiro	\N	STUDENT	11943	5	ES	\N	\N
-211	Finley	Eckert-Crosse	\N	STUDENT	11568	4	ES	\N	\N
-212	Mohammad Haroon	Bajwa	\N	STUDENT	10941	8	MS	\N	\N
-213	Erik	Suther	\N	STUDENT	10511	7	MS	\N	\N
-214	Aarav	Chandaria	\N	STUDENT	11792	4	ES	\N	\N
-215	Aarini Vijay	Chandaria	\N	STUDENT	10338	9	HS	\N	\N
-216	Leo	Korvenoja	\N	STUDENT	11526	11	HS	\N	\N
-217	Mandisa	Mathew	\N	STUDENT	10881	12	HS	\N	\N
-218	Hafsa	Ahmed	\N	STUDENT	12158	8	MS	\N	\N
-219	Mariam	Ahmed	\N	STUDENT	12159	8	MS	\N	\N
-220	Osman	Ahmed	\N	STUDENT	11745	12	HS	\N	\N
-221	Tessa	Steel	\N	STUDENT	12116	10	HS	\N	\N
-222	Ethan	Steel	\N	STUDENT	11442	12	HS	\N	\N
-223	Brianna	Otieno	\N	STUDENT	11271	8	MS	\N	\N
-224	Sohum	Bid	\N	STUDENT	13042	K	ES	\N	\N
-225	Yara	Janmohamed	\N	STUDENT	12173	4	ES	\N	\N
-226	Aila	Janmohamed	\N	STUDENT	12174	8	MS	\N	\N
-227	Rwenzori	Rogers	\N	STUDENT	12208	4	ES	\N	\N
-228	Junin	Rogers	\N	STUDENT	12209	5	ES	\N	\N
-229	Jasmine	Schoneveld	\N	STUDENT	11879	3	ES	\N	\N
-230	Hiyabel	Kefela	\N	STUDENT	11444	12	HS	\N	\N
-231	Arra	Manji	\N	STUDENT	12416	4	ES	\N	\N
-232	Deesha	Shah	\N	STUDENT	12108	10	HS	\N	\N
-233	Sidh	Rughani	\N	STUDENT	10770	9	HS	\N	\N
-234	Sohil	Chandaria	\N	STUDENT	12124	10	HS	\N	\N
-235	Imara	Patel	\N	STUDENT	12275	11	HS	\N	\N
-236	Riyaan	Wissanji	\N	STUDENT	11437	10	HS	\N	\N
-237	Mikayla	Wissanji	\N	STUDENT	11440	12	HS	\N	\N
-238	Leti	Bwonya	\N	STUDENT	12270	12	HS	\N	\N
-242	Mairi	Kurauchi	\N	STUDENT	11491	3	ES	\N	\N
-243	Meiya	Chandaria	\N	STUDENT	10932	5	ES	\N	\N
-244	Aiden	Inwani	\N	STUDENT	12531	11	HS	\N	\N
-245	Nirvaan	Shah	\N	STUDENT	10774	12	HS	\N	\N
-246	Ziya	Butt	\N	STUDENT	11401	9	HS	\N	\N
-247	Sofia	Shamji	\N	STUDENT	11839	8	MS	\N	\N
-248	Oumi	Tall	\N	STUDENT	11472	5	ES	\N	\N
-249	Yasmin	Price-Abdi	\N	STUDENT	10487	12	HS	\N	\N
-250	Kaitlyn	Fort	\N	STUDENT	11704	3	ES	\N	\N
-251	Keiya	Raja	\N	STUDENT	10637	8	MS	\N	\N
-252	Ryka	Shah	\N	STUDENT	10955	12	HS	\N	\N
-253	Ruby	Muoki	\N	STUDENT	12278	11	HS	\N	\N
-254	Siana	Chandaria	\N	STUDENT	25072	11	HS	\N	\N
-255	Tatyana	Wangari	\N	STUDENT	11877	12	HS	\N	\N
-256	Sohan	Shah	\N	STUDENT	11190	12	HS	\N	\N
-257	Zameer	Nanji	\N	STUDENT	10416	9	HS	\N	\N
-258	Esther	Paul	\N	STUDENT	11326	8	MS	\N	\N
-259	Liam	Sanders	\N	STUDENT	10430	10	HS	\N	\N
-260	Teresa	Sanders	\N	STUDENT	10431	12	HS	\N	\N
-261	Sarah	Melson	\N	STUDENT	12132	9	HS	\N	\N
-262	Kaysan Karim	Kurji	\N	STUDENT	12229	3	ES	\N	\N
-263	Ashi	Doshi	\N	STUDENT	11768	4	ES	\N	\N
-264	Anay	Doshi	\N	STUDENT	10636	8	MS	\N	\N
-265	Bianca	Bini	\N	STUDENT	12731	2	ES	\N	\N
-266	Otis	Cutler	\N	STUDENT	11535	4	ES	\N	\N
-267	Leo	Cutler	\N	STUDENT	10673	9	HS	\N	\N
-268	Andrew	Wachira	\N	STUDENT	20866	10	HS	\N	\N
-269	Jordan	Nzioka	\N	STUDENT	11884	2	ES	\N	\N
-270	Zuriel	Nzioka	\N	STUDENT	11313	4	ES	\N	\N
-271	Radek Tidi	Otieno	\N	STUDENT	10865	5	ES	\N	\N
-272	Ranam Telu	Otieno	\N	STUDENT	10943	5	ES	\N	\N
-273	Riani Tunu	Otieno	\N	STUDENT	10866	5	ES	\N	\N
-274	Sachin	Weaver	\N	STUDENT	10715	11	HS	\N	\N
-275	Mark	Landolt	\N	STUDENT	12284	8	MS	\N	\N
-276	Kianu	Ruiz Stannah	\N	STUDENT	10247	7	MS	\N	\N
-277	Tamia	Ruiz Stannah	\N	STUDENT	25032	11	HS	\N	\N
-278	Ahmad Eissa	Noordin	\N	STUDENT	11611	4	ES	\N	\N
-279	Lily	Herman-Roloff	\N	STUDENT	12194	3	ES	\N	\N
-280	Shela	Herman-Roloff	\N	STUDENT	12195	5	ES	\N	\N
-281	Bruke	Baheta	\N	STUDENT	10800	8	MS	\N	\N
-282	Helina	Baheta	\N	STUDENT	20766	11	HS	\N	\N
-283	Jonathan	Bjornholm	\N	STUDENT	11040	11	HS	\N	\N
-284	Rose	Vellenga	\N	STUDENT	11574	4	ES	\N	\N
-285	Solomon	Vellenga	\N	STUDENT	11573	5	ES	\N	\N
-286	Ishaan	Patel	\N	STUDENT	11255	4	ES	\N	\N
-287	Ciaran	Clements	\N	STUDENT	11843	8	MS	\N	\N
-288	Ahana	Nair	\N	STUDENT	12332	1	ES	\N	\N
-289	Aryaan	Pattni	\N	STUDENT	11729	4	ES	\N	\N
-290	Hana	Boxer	\N	STUDENT	11200	11	HS	\N	\N
-291	Parth	Shah	\N	STUDENT	10993	10	HS	\N	\N
-292	Layla	Khubchandani	\N	STUDENT	11263	9	HS	\N	\N
-293	Nikhil	Patel	\N	STUDENT	12494	1	ES	\N	\N
-294	Janak	Shah	\N	STUDENT	10830	11	HS	\N	\N
-295	Saba	Tunbridge	\N	STUDENT	10645	12	HS	\N	\N
-296	Shriya	Manek	\N	STUDENT	11777	11	HS	\N	\N
-297	Diane	Bamlango	\N	STUDENT	12371	K	ES	\N	\N
-303	Cecile	Bamlango	\N	STUDENT	10979	11	HS	\N	\N
-304	Vanaaya	Patel	\N	STUDENT	20839	9	HS	\N	\N
-305	Veer	Patel	\N	STUDENT	20840	9	HS	\N	\N
-306	Laina	Shah	\N	STUDENT	11502	4	ES	\N	\N
-307	Savir	Shah	\N	STUDENT	10965	7	MS	\N	\N
-308	Nikolaj	Vestergaard	\N	STUDENT	11789	3	ES	\N	\N
-309	Kian	Allport	\N	STUDENT	11445	12	HS	\N	\N
-310	Reid	Hagelberg	\N	STUDENT	12094	9	HS	\N	\N
-311	Zoe Rose	Hagelberg	\N	STUDENT	12077	11	HS	\N	\N
-312	Juju	Kimmelman-May	\N	STUDENT	12354	4	ES	\N	\N
-313	Chloe	Kimmelman-May	\N	STUDENT	12353	8	MS	\N	\N
-314	Tara	Uberoi	\N	STUDENT	11452	11	HS	\N	\N
-315	Chansa	Mwenya	\N	STUDENT	24018	12	HS	\N	\N
-316	Liam	Patel	\N	STUDENT	11486	4	ES	\N	\N
-317	Shane	Patel	\N	STUDENT	10138	8	MS	\N	\N
-318	Rhiyana	Patel	\N	STUDENT	26025	10	HS	\N	\N
-319	Yash	Pattni	\N	STUDENT	10334	7	MS	\N	\N
-320	Gaurav	Samani	\N	STUDENT	11179	5	ES	\N	\N
-321	Siddharth	Samani	\N	STUDENT	11180	5	ES	\N	\N
-322	Kiara	Bhandari	\N	STUDENT	10791	9	HS	\N	\N
-323	Safa	Monadjem	\N	STUDENT	12224	3	ES	\N	\N
-324	Malaika	Monadjem	\N	STUDENT	25076	11	HS	\N	\N
-325	Sam	Khagram	\N	STUDENT	11858	10	HS	\N	\N
-326	Radha	Shah	\N	STUDENT	10786	7	MS	\N	\N
-327	Vishnu	Shah	\N	STUDENT	10796	10	HS	\N	\N
-328	Cuyuni	Khan	\N	STUDENT	12013	10	HS	\N	\N
-329	Lengai	Inglis	\N	STUDENT	12131	9	HS	\N	\N
-330	Mathias	Yohannes	\N	STUDENT	20875	10	HS	\N	\N
-331	Avish	Arora	\N	STUDENT	12129	9	HS	\N	\N
-332	Saptha Girish	Bommadevara	\N	STUDENT	10504	10	HS	\N	\N
-333	Sharmila Devi	Bommadevara	\N	STUDENT	10505	12	HS	\N	\N
-334	Adama	Sangare	\N	STUDENT	12309	11	HS	\N	\N
-335	Gabrielle	Trottier	\N	STUDENT	11945	9	HS	\N	\N
-336	Mannat	Suri	\N	STUDENT	11485	4	ES	\N	\N
-337	Armaan	Suri	\N	STUDENT	11076	7	MS	\N	\N
-338	Zoe	Furness	\N	STUDENT	11101	12	HS	\N	\N
-339	Tandin	Tshomo	\N	STUDENT	12442	7	MS	\N	\N
-340	Thuji	Zangmo	\N	STUDENT	12394	8	MS	\N	\N
-341	Maxym	Berezhny	\N	STUDENT	10878	9	HS	\N	\N
-342	Thomas	Higgins	\N	STUDENT	11744	10	HS	\N	\N
-343	Louisa	Higgins	\N	STUDENT	11743	12	HS	\N	\N
-344	Indhira	Startup	\N	STUDENT	12244	2	ES	\N	\N
-345	Anyamarie	Lindgren	\N	STUDENT	11389	8	MS	\N	\N
-346	Takumi	Plunkett	\N	STUDENT	12854	8	MS	\N	\N
-347	Catherina	Gagnidze	\N	STUDENT	11556	12	HS	\N	\N
-348	Adam	Jama	\N	STUDENT	11676	2	ES	\N	\N
-349	Amina	Jama	\N	STUDENT	11675	4	ES	\N	\N
-350	Guled	Jama	\N	STUDENT	12757	6	MS	\N	\N
-351	Noha	Salituri	\N	STUDENT	12211	1	ES	\N	\N
-352	Amaia	Salituri	\N	STUDENT	12212	4	ES	\N	\N
-353	Leone	Salituri	\N	STUDENT	12213	4	ES	\N	\N
-354	Sorawit (Nico)	Thongmod	\N	STUDENT	12214	5	ES	\N	\N
-355	Henk	Makimei	\N	STUDENT	11860	12	HS	\N	\N
-989	Patrick	Ryan	\N	STUDENT	12816	4	ES	\N	\N
-362	Mira	Maldonado	\N	STUDENT	11175	10	HS	\N	\N
-363	Che	Maldonado	\N	STUDENT	11170	12	HS	\N	\N
-364	Phuong An	Nguyen	\N	STUDENT	11261	4	ES	\N	\N
-365	Charlotte	Smith	\N	STUDENT	12705	4	ES	\N	\N
-366	Olivia	Von Strauss	\N	STUDENT	12719	1	ES	\N	\N
-367	Gabriel	Petrangeli	\N	STUDENT	11009	12	HS	\N	\N
-368	Jihwan	Hwang	\N	STUDENT	11951	5	ES	\N	\N
-369	Anneka	Hornor	\N	STUDENT	12377	10	HS	\N	\N
-370	Florencia	Veveiros	\N	STUDENT	12008	5	ES	\N	\N
-371	Xavier	Veveiros	\N	STUDENT	12009	10	HS	\N	\N
-372	Laras	Clark	\N	STUDENT	11786	3	ES	\N	\N
-373	Galuh	Clark	\N	STUDENT	11787	7	MS	\N	\N
-374	Miriam	Schwabel	\N	STUDENT	12267	12	HS	\N	\N
-375	Ben	Gremley	\N	STUDENT	12113	10	HS	\N	\N
-376	Calvin	Gremley	\N	STUDENT	12115	10	HS	\N	\N
-377	Danial	Baig-Giannotti	\N	STUDENT	12546	1	ES	\N	\N
-378	Daria	Baig-Giannotti	\N	STUDENT	11593	4	ES	\N	\N
-379	Ciara	Jackson	\N	STUDENT	12071	11	HS	\N	\N
-380	Ansley	Nelson	\N	STUDENT	12806	1	ES	\N	\N
-381	Caroline	Nelson	\N	STUDENT	12803	4	ES	\N	\N
-382	Tamara	Wanyoike	\N	STUDENT	12658	11	HS	\N	\N
-383	Marcella	Cowan	\N	STUDENT	12437	8	MS	\N	\N
-384	Alisia	Sommerlund	\N	STUDENT	11717	7	MS	\N	\N
-385	Lea	Castel-Wang	\N	STUDENT	12507	10	HS	\N	\N
-386	Anisha	Som Chaudhuri	\N	STUDENT	12707	4	ES	\N	\N
-387	Gloria	Jacques	\N	STUDENT	12067	11	HS	\N	\N
-388	Dana	Nurshaikhova	\N	STUDENT	11938	9	HS	\N	\N
-389	Raheel	Shah	\N	STUDENT	12161	8	MS	\N	\N
-390	Rohan	Shah	\N	STUDENT	20850	10	HS	\N	\N
-391	Malou	Burmester	\N	STUDENT	11395	5	ES	\N	\N
-392	Nicholas	Burmester	\N	STUDENT	11394	8	MS	\N	\N
-393	Ethan	Sengendo	\N	STUDENT	11702	10	HS	\N	\N
-394	Omer	Osman	\N	STUDENT	12443	1	ES	\N	\N
-395	Felix	Jensen	\N	STUDENT	12238	2	ES	\N	\N
-396	Fiona	Jensen	\N	STUDENT	12237	3	ES	\N	\N
-397	Andrew	Gerba	\N	STUDENT	11462	7	MS	\N	\N
-398	Madigan	Gerba	\N	STUDENT	11507	9	HS	\N	\N
-399	Porter	Gerba	\N	STUDENT	11449	11	HS	\N	\N
-400	Aaron	Atamuradov	\N	STUDENT	11800	5	ES	\N	\N
-401	Arina	Atamuradova	\N	STUDENT	11752	11	HS	\N	\N
-402	Seojun	Yoon	\N	STUDENT	12792	7	MS	\N	\N
-403	Seohyeon	Yoon	\N	STUDENT	12791	9	HS	\N	\N
-404	Sasha	Allard Ruiz	\N	STUDENT	11387	12	HS	\N	\N
-405	Ali	Alnaqbi	\N	STUDENT	12910	2	ES	\N	\N
-406	Almayasa	Alnaqbi	\N	STUDENT	12908	7	MS	\N	\N
-407	Fatima	Alnaqbi	\N	STUDENT	12907	9	HS	\N	\N
-408	Ibrahim	Alnaqbi	\N	STUDENT	12906	10	HS	\N	\N
-409	Rasmus	Jabbour	\N	STUDENT	12396	1	ES	\N	\N
-410	Olivia	Jabbour	\N	STUDENT	12395	4	ES	\N	\N
-411	Tobin	Allen	\N	STUDENT	12308	9	HS	\N	\N
-412	Corinne	Allen	\N	STUDENT	12307	12	HS	\N	\N
-413	Maya	Ben Anat	\N	STUDENT	12643	PK	ES	\N	\N
-414	Ella	Ben Anat	\N	STUDENT	11475	5	ES	\N	\N
-415	Shira	Ben Anat	\N	STUDENT	11518	8	MS	\N	\N
-416	Amishi	Mishra	\N	STUDENT	12489	12	HS	\N	\N
-417	Arushi	Mishra	\N	STUDENT	12488	12	HS	\N	\N
-418	Riley	O'neill Calver	\N	STUDENT	11488	4	ES	\N	\N
-419	Lukas	Norman	\N	STUDENT	11534	10	HS	\N	\N
-420	Lise	Norman	\N	STUDENT	11533	12	HS	\N	\N
-423	Ella	Sims	\N	STUDENT	24043	12	HS	\N	\N
-424	Sebastian	Wikenczy Thomsen	\N	STUDENT	11446	11	HS	\N	\N
-425	Logan Lilly	Foley	\N	STUDENT	11758	3	ES	\N	\N
-426	James	Mills	\N	STUDENT	12376	11	HS	\N	\N
-427	Amira	Goold	\N	STUDENT	11820	5	ES	\N	\N
-428	Micaella	Shenge	\N	STUDENT	11527	6	MS	\N	\N
-429	Siri	Huber	\N	STUDENT	12338	5	ES	\N	\N
-430	Lisa	Huber	\N	STUDENT	12339	9	HS	\N	\N
-431	Jara	Huber	\N	STUDENT	12340	10	HS	\N	\N
-432	Case	O'hearn	\N	STUDENT	12764	7	MS	\N	\N
-433	Maeve	O'hearn	\N	STUDENT	12763	10	HS	\N	\N
-434	Komborero	Chigudu	\N	STUDENT	11375	5	ES	\N	\N
-435	Munashe	Chigudu	\N	STUDENT	11376	8	MS	\N	\N
-436	Nyasha	Chigudu	\N	STUDENT	11373	11	HS	\N	\N
-437	Kodjiro	Sakaedani Petrovic	\N	STUDENT	12271	11	HS	\N	\N
-438	Ines Clelia	Essoungou	\N	STUDENT	12522	10	HS	\N	\N
-439	Caspian	Mcsharry	\N	STUDENT	12562	5	ES	\N	\N
-440	Theodore	Mcsharry	\N	STUDENT	12563	9	HS	\N	\N
-441	Joshua	Exel	\N	STUDENT	12073	10	HS	\N	\N
-442	Hannah	Exel	\N	STUDENT	12074	12	HS	\N	\N
-443	Sumedh Vedya	Vutukuru	\N	STUDENT	11569	12	HS	\N	\N
-444	Nyasha	Mabaso	\N	STUDENT	11657	5	ES	\N	\N
-445	Jack	Young	\N	STUDENT	12323	8	MS	\N	\N
-446	Annie	Young	\N	STUDENT	12378	11	HS	\N	\N
-447	Sofia	Peck	\N	STUDENT	11892	12	HS	\N	\N
-448	Elia	O'hara	\N	STUDENT	12062	11	HS	\N	\N
-449	Becca	Friedman	\N	STUDENT	12200	5	ES	\N	\N
-450	Nandipha	Murape	\N	STUDENT	11700	11	HS	\N	\N
-451	Sarah	Van Der Vliet	\N	STUDENT	11630	7	MS	\N	\N
-452	Grecy	Van Der Vliet	\N	STUDENT	11629	12	HS	\N	\N
-453	Maila	Giri	\N	STUDENT	12421	3	ES	\N	\N
-454	Rohan	Giri	\N	STUDENT	12410	10	HS	\N	\N
-455	Ao	Kasahara	\N	STUDENT	13041	K	ES	\N	\N
-456	Leonard	Laurits	\N	STUDENT	12250	1	ES	\N	\N
-457	Charlotte	Laurits	\N	STUDENT	12249	3	ES	\N	\N
-458	Kai	Jansson	\N	STUDENT	11761	3	ES	\N	\N
-459	Ines Elise	Hansen	\N	STUDENT	12363	2	ES	\N	\N
-460	Marius	Hansen	\N	STUDENT	12365	6	MS	\N	\N
-461	Minseo	Choi	\N	STUDENT	11145	4	ES	\N	\N
-462	Abigail	Tassew	\N	STUDENT	12637	3	ES	\N	\N
-463	Nathan	Tassew	\N	STUDENT	12636	10	HS	\N	\N
-464	Catherine	Johnson	\N	STUDENT	12867	1	ES	\N	\N
-465	Brycelyn	Johnson	\N	STUDENT	12866	6	MS	\N	\N
-466	Azzalina	Johnson	\N	STUDENT	12865	10	HS	\N	\N
-467	Aaditya	Raja	\N	STUDENT	12103	10	HS	\N	\N
-468	Leila	Priestley	\N	STUDENT	20843	11	HS	\N	\N
-469	Saron	Piper	\N	STUDENT	25038	11	HS	\N	\N
-470	Maxwell	Mazibuko	\N	STUDENT	12574	10	HS	\N	\N
-471	Naledi	Mazibuko	\N	STUDENT	12573	10	HS	\N	\N
-472	Sechaba	Mazibuko	\N	STUDENT	12575	10	HS	\N	\N
-473	Ananya	Raval	\N	STUDENT	12257	1	ES	\N	\N
-474	Christopher Ross	Donohue	\N	STUDENT	10333	7	MS	\N	\N
-475	Luna	Cooney	\N	STUDENT	12111	3	ES	\N	\N
-476	Maïa	Cooney	\N	STUDENT	12110	10	HS	\N	\N
-477	Danaé	Materne	\N	STUDENT	12154	9	HS	\N	\N
-478	Ameya	Dale	\N	STUDENT	10495	11	HS	\N	\N
-479	Arthur	Hire	\N	STUDENT	11232	4	ES	\N	\N
-484	Akshith	Sekar	\N	STUDENT	10676	10	HS	\N	\N
-485	Elsa	Lloyd	\N	STUDENT	11464	7	MS	\N	\N
-486	Laé	Firzé Al Ghaoui	\N	STUDENT	12191	5	ES	\N	\N
-487	Alessia	Quacquarella	\N	STUDENT	11461	5	ES	\N	\N
-488	Hamish	Ledgard	\N	STUDENT	12268	12	HS	\N	\N
-489	Sophia	Shahbal	\N	STUDENT	12742	K	ES	\N	\N
-490	Saif	Shahbal	\N	STUDENT	12712	2	ES	\N	\N
-491	Jonathan	Rwehumbiza	\N	STUDENT	11854	10	HS	\N	\N
-492	Simone	Eidex	\N	STUDENT	11897	11	HS	\N	\N
-493	Alston	Schenck	\N	STUDENT	11484	4	ES	\N	\N
-494	Troy	Hopps	\N	STUDENT	12306	3	ES	\N	\N
-495	Noah	Hughes	\N	STUDENT	10477	11	HS	\N	\N
-496	Maximus	Njenga	\N	STUDENT	12303	2	ES	\N	\N
-497	Sadie	Njenga	\N	STUDENT	12279	5	ES	\N	\N
-498	Justin	Njenga	\N	STUDENT	12281	10	HS	\N	\N
-499	Daniel	Jensen	\N	STUDENT	11898	10	HS	\N	\N
-500	Maya	Thibodeau	\N	STUDENT	12357	8	MS	\N	\N
-501	Lorenzo	De Vries Aguirre	\N	STUDENT	11552	9	HS	\N	\N
-502	Marco	De Vries Aguirre	\N	STUDENT	11551	12	HS	\N	\N
-503	Adam	Saleem	\N	STUDENT	12620	2	ES	\N	\N
-504	Emir	Abdellahi	\N	STUDENT	11605	11	HS	\N	\N
-505	Maliah	O'neal	\N	STUDENT	11912	8	MS	\N	\N
-506	Caio	Kraemer	\N	STUDENT	11906	9	HS	\N	\N
-507	Isabela	Kraemer	\N	STUDENT	11907	12	HS	\N	\N
-508	Eva	Bannikau	\N	STUDENT	11780	4	ES	\N	\N
-509	Alba	Prawitz	\N	STUDENT	12291	2	ES	\N	\N
-510	Max	Prawitz	\N	STUDENT	12298	5	ES	\N	\N
-511	Leo	Prawitz	\N	STUDENT	12297	6	MS	\N	\N
-512	Abigail	Holder	\N	STUDENT	12060	5	ES	\N	\N
-513	Charles	Holder	\N	STUDENT	12059	11	HS	\N	\N
-514	Isabel	Holder	\N	STUDENT	12056	12	HS	\N	\N
-515	Sebastian	Ansorg	\N	STUDENT	12656	7	MS	\N	\N
-516	Leon	Ansorg	\N	STUDENT	12655	11	HS	\N	\N
-517	Pilar	Bosch	\N	STUDENT	12217	K	ES	\N	\N
-518	Moira	Bosch	\N	STUDENT	12218	2	ES	\N	\N
-519	Blanca	Bosch	\N	STUDENT	12219	4	ES	\N	\N
-520	Aven	Ross	\N	STUDENT	11678	7	MS	\N	\N
-521	Kai	Herbst	\N	STUDENT	12231	2	ES	\N	\N
-522	Sofia	Herbst	\N	STUDENT	12230	4	ES	\N	\N
-523	Michael	Bierly	\N	STUDENT	12179	8	MS	\N	\N
-524	Miya	Stephens	\N	STUDENT	11802	5	ES	\N	\N
-525	Jihong	Joo	\N	STUDENT	11686	10	HS	\N	\N
-526	Hyojin	Joo	\N	STUDENT	11685	12	HS	\N	\N
-527	Bruno	Sottsas	\N	STUDENT	12358	4	ES	\N	\N
-528	Natasha	Sottsas	\N	STUDENT	12359	7	MS	\N	\N
-19	Theodore	Ashton	\N	STUDENT	11893	9	HS	\N	\N
-529	Krishna	Gandhi	\N	STUDENT	12525	10	HS	\N	\N
-530	Hrushikesh	Gandhi	\N	STUDENT	12524	12	HS	\N	\N
-531	Max	Leon	\N	STUDENT	12490	12	HS	\N	\N
-532	Myra	Korngold	\N	STUDENT	12775	5	ES	\N	\N
-533	Mila Ruth	Korngold	\N	STUDENT	12773	7	MS	\N	\N
-534	Alexander	Tarquini	\N	STUDENT	12223	4	ES	\N	\N
-535	Marian	Abukari	\N	STUDENT	10602	7	MS	\N	\N
-536	Manuela	Abukari	\N	STUDENT	10672	9	HS	\N	\N
-537	Soren	Mansourian	\N	STUDENT	12470	1	ES	\N	\N
-542	Manali	Caminha	\N	STUDENT	12079	9	HS	\N	\N
-543	Nomi	Leca Turner	\N	STUDENT	12894	PK	ES	\N	\N
-544	Enzo	Leca Turner	\N	STUDENT	12893	1	ES	\N	\N
-545	Kelsie	Karuga	\N	STUDENT	12162	6	MS	\N	\N
-546	Kayla	Karuga	\N	STUDENT	12163	8	MS	\N	\N
-547	Tamar	Jones-Avni	\N	STUDENT	12897	K	ES	\N	\N
-548	Dov	Jones-Avni	\N	STUDENT	12784	2	ES	\N	\N
-549	Nahal	Jones-Avni	\N	STUDENT	12783	4	ES	\N	\N
-550	Noa	Godden	\N	STUDENT	12504	5	ES	\N	\N
-551	Emma	Godden	\N	STUDENT	12479	9	HS	\N	\N
-552	Lisa	Godden	\N	STUDENT	12478	10	HS	\N	\N
-553	Ella	Acharya	\N	STUDENT	12882	1	ES	\N	\N
-554	Anshi	Acharya	\N	STUDENT	12881	7	MS	\N	\N
-555	Clara	Hardy	\N	STUDENT	12722	1	ES	\N	\N
-556	Safari	Dara	\N	STUDENT	11958	4	ES	\N	\N
-557	Moira	Koucheravy	\N	STUDENT	12305	4	ES	\N	\N
-558	Carys	Koucheravy	\N	STUDENT	12304	8	MS	\N	\N
-559	Edouard	Germain	\N	STUDENT	12258	11	HS	\N	\N
-560	Jacob	Germain	\N	STUDENT	12259	11	HS	\N	\N
-561	Lynn Htet	Aung	\N	STUDENT	12293	5	ES	\N	\N
-562	Phyo Nyein Nyein	Thu	\N	STUDENT	12302	7	MS	\N	\N
-563	Ronan	Patel	\N	STUDENT	10119	8	MS	\N	\N
-564	Annabel	Asamoah	\N	STUDENT	10746	11	HS	\N	\N
-565	Teo	Duwyn	\N	STUDENT	12085	5	ES	\N	\N
-566	Mia	Duwyn	\N	STUDENT	12086	9	HS	\N	\N
-567	Cato	Van Bommel	\N	STUDENT	12028	11	HS	\N	\N
-568	Henrik	Raehalme	\N	STUDENT	12698	1	ES	\N	\N
-569	Emilia	Raehalme	\N	STUDENT	12697	5	ES	\N	\N
-570	Asara	O'bra	\N	STUDENT	12341	9	HS	\N	\N
-571	Seonu	Lee	\N	STUDENT	12449	3	ES	\N	\N
-572	Maya	Davis	\N	STUDENT	10953	12	HS	\N	\N
-573	Anika	Bruhwiler	\N	STUDENT	12050	12	HS	\N	\N
-574	Mila	Jovanovic	\N	STUDENT	12678	5	ES	\N	\N
-575	Dunja	Jovanovic	\N	STUDENT	12677	8	MS	\N	\N
-576	Elise	Walji	\N	STUDENT	12740	2	ES	\N	\N
-577	Felyne	Walji	\N	STUDENT	12739	3	ES	\N	\N
-578	Dechen	Jacob	\N	STUDENT	12765	7	MS	\N	\N
-579	Tenzin	Jacob	\N	STUDENT	12766	11	HS	\N	\N
-580	Fatoumata	Touré	\N	STUDENT	12324	4	ES	\N	\N
-581	Ousmane	Touré	\N	STUDENT	12325	5	ES	\N	\N
-582	Helena	Khayat De Andrade	\N	STUDENT	12642	PK	ES	\N	\N
-583	Sophia	Khayat De Andrade	\N	STUDENT	12650	1	ES	\N	\N
-584	Maelle	Nitcheu	\N	STUDENT	12762	PK	ES	\N	\N
-585	Margot	Nitcheu	\N	STUDENT	12415	2	ES	\N	\N
-586	Marion	Nitcheu	\N	STUDENT	12417	3	ES	\N	\N
-587	Eva	Fernstrom	\N	STUDENT	11939	5	ES	\N	\N
-588	Sienna	Barragan Sofrony	\N	STUDENT	12831	K	ES	\N	\N
-589	Gael	Barragan Sofrony	\N	STUDENT	12711	3	ES	\N	\N
-590	William	Jansen	\N	STUDENT	11837	8	MS	\N	\N
-591	Matias	Jansen	\N	STUDENT	11855	10	HS	\N	\N
-592	Siri	Maagaard	\N	STUDENT	12827	4	ES	\N	\N
-593	Laerke	Maagaard	\N	STUDENT	12826	9	HS	\N	\N
-594	Chae Hyun	Jin	\N	STUDENT	12647	PK	ES	\N	\N
-595	A-Hyun	Jin	\N	STUDENT	12246	2	ES	\N	\N
-596	Pietro	Fundaro	\N	STUDENT	11329	10	HS	\N	\N
-597	Jade	Onderi	\N	STUDENT	11847	9	HS	\N	\N
-598	Nikhil	Kimatrai	\N	STUDENT	11810	9	HS	\N	\N
-599	Rhea	Kimatrai	\N	STUDENT	11809	9	HS	\N	\N
-600	Kennedy	Ireri	\N	STUDENT	10313	9	HS	\N	\N
-603	Kaynan	Abshir	\N	STUDENT	12830	K	ES	\N	\N
-604	Farzin	Taneem	\N	STUDENT	11335	7	MS	\N	\N
-605	Umaiza	Taneem	\N	STUDENT	11336	8	MS	\N	\N
-606	Oagile	Mothobi	\N	STUDENT	12808	1	ES	\N	\N
-607	Resegofetse	Mothobi	\N	STUDENT	12807	4	ES	\N	\N
-608	Soline	Wittmann	\N	STUDENT	12429	10	HS	\N	\N
-609	Mateo	Muziramakenga	\N	STUDENT	12704	1	ES	\N	\N
-610	Aiden	Muziramakenga	\N	STUDENT	12703	4	ES	\N	\N
-611	Charlie	Carver Wildig	\N	STUDENT	12602	5	ES	\N	\N
-612	Barney	Carver Wildig	\N	STUDENT	12601	7	MS	\N	\N
-613	Jijoon	Park	\N	STUDENT	12787	2	ES	\N	\N
-614	Jooan	Park	\N	STUDENT	12786	4	ES	\N	\N
-615	Zohar	Hercberg	\N	STUDENT	12745	PK	ES	\N	\N
-616	Amitai	Hercberg	\N	STUDENT	12680	3	ES	\N	\N
-617	Uriya	Hercberg	\N	STUDENT	12682	7	MS	\N	\N
-618	Rafael	Carter	\N	STUDENT	12776	8	MS	\N	\N
-619	Vihaan	Arora	\N	STUDENT	12242	2	ES	\N	\N
-620	Sofia	Crandall	\N	STUDENT	12990	12	HS	\N	\N
-621	Almaira	Ihsan	\N	STUDENT	13061	5	ES	\N	\N
-622	Rayyan	Ihsan	\N	STUDENT	13060	7	MS	\N	\N
-623	Zakhrafi	Ihsan	\N	STUDENT	13063	11	HS	\N	\N
-624	Alexander	Thomas	\N	STUDENT	12579	11	HS	\N	\N
-626	Samuel	Dove	\N	STUDENT	12920	11	HS	\N	\N
-627	Alvin	Ngumi	\N	STUDENT	12588	11	HS	\N	\N
-628	Julia	Handler	\N	STUDENT	13100	6	MS	\N	\N
-629	Josephine	Maguire	\N	STUDENT	12592	8	MS	\N	\N
-630	Theodore	Maguire	\N	STUDENT	12593	10	HS	\N	\N
-631	Deniza	Kasymbekova Tauras	\N	STUDENT	13027	5	ES	\N	\N
-632	Amman	Assefa	\N	STUDENT	12669	8	MS	\N	\N
-633	Lucas	Maasdorp Mogollon	\N	STUDENT	12822	1	ES	\N	\N
-634	Gabriela	Maasdorp Mogollon	\N	STUDENT	12821	4	ES	\N	\N
-635	Dallin	Daines	\N	STUDENT	13064	2	ES	\N	\N
-636	Caleb	Daines	\N	STUDENT	13084	4	ES	\N	\N
-637	Gabriel	Mccown	\N	STUDENT	12833	K	ES	\N	\N
-638	Clea	Mccown	\N	STUDENT	12837	2	ES	\N	\N
-639	Beckham	Stock	\N	STUDENT	12916	2	ES	\N	\N
-640	Payton	Stock	\N	STUDENT	12914	11	HS	\N	\N
-641	Ruhan	Reza	\N	STUDENT	13021	7	MS	\N	\N
-642	Nandita	Sankar	\N	STUDENT	12802	3	ES	\N	\N
-643	Ian	Kavaleuski	\N	STUDENT	13059	10	HS	\N	\N
-644	Kian	Ghelani-Decorte	\N	STUDENT	12673	8	MS	\N	\N
-645	Elrad	Abdurazakov	\N	STUDENT	12690	6	MS	\N	\N
-646	Malik	Kamara	\N	STUDENT	12724	1	ES	\N	\N
-647	Ethan	Diehl	\N	STUDENT	12863	PK	ES	\N	\N
-648	Malcolm	Diehl	\N	STUDENT	12864	1	ES	\N	\N
-649	Elena	Mosher	\N	STUDENT	12710	1	ES	\N	\N
-650	Emma	Mosher	\N	STUDENT	12709	3	ES	\N	\N
-651	Abibatou	Magassouba	\N	STUDENT	13092	2	ES	\N	\N
-652	Sada	Bomba	\N	STUDENT	12989	11	HS	\N	\N
-653	Tamaki	Ishikawa	\N	STUDENT	13054	3	ES	\N	\N
-654	Colin	Walls	\N	STUDENT	12475	3	ES	\N	\N
-655	Ethan	Walls	\N	STUDENT	12474	5	ES	\N	\N
-656	Emilin	Patterson	\N	STUDENT	12811	3	ES	\N	\N
-657	Kaitlin	Patterson	\N	STUDENT	12810	7	MS	\N	\N
-658	Elsie	Mackay	\N	STUDENT	12886	4	ES	\N	\N
-664	Nora	Mackay	\N	STUDENT	12885	6	MS	\N	\N
-665	Samantha	Ishee	\N	STUDENT	12832	K	ES	\N	\N
-666	Emily	Ishee	\N	STUDENT	12836	5	ES	\N	\N
-667	Sonya	Wagner	\N	STUDENT	12892	4	ES	\N	\N
-668	Ayaan	Pabani	\N	STUDENT	12256	1	ES	\N	\N
-669	Arth	Jain	\N	STUDENT	13088	K	ES	\N	\N
-670	Caleb	Fekadeneh	\N	STUDENT	12641	5	ES	\N	\N
-671	Sina	Fekadeneh	\N	STUDENT	12633	10	HS	\N	\N
-672	Marc-Andri	Bachmann	\N	STUDENT	12604	8	MS	\N	\N
-673	Ralia	Daher	\N	STUDENT	13066	PK	ES	\N	\N
-674	Abbas	Daher	\N	STUDENT	12435	1	ES	\N	\N
-675	Ruth Yifru	Tafesse	\N	STUDENT	13099	11	HS	\N	\N
-676	Emil	Grundberg	\N	STUDENT	13019	8	MS	\N	\N
-677	Amen	Mezemir	\N	STUDENT	10498	8	MS	\N	\N
-678	Zizwani	Chikapa	\N	STUDENT	13101	PK	ES	\N	\N
-679	Chawanangwa	Mkandawire	\N	STUDENT	12292	7	MS	\N	\N
-680	Daniel	Mkandawire	\N	STUDENT	12272	11	HS	\N	\N
-681	Selkie	Douglas-Hamilton Pope	\N	STUDENT	12995	9	HS	\N	\N
-682	Yoav	Margovsky-Lotem	\N	STUDENT	12649	PK	ES	\N	\N
-683	Liam	Irungu	\N	STUDENT	13039	K	ES	\N	\N
-684	Aiden	Irungu	\N	STUDENT	13038	2	ES	\N	\N
-685	Feng Zimo	Li	\N	STUDENT	13024	5	ES	\N	\N
-686	Feng Milun	Li	\N	STUDENT	13023	7	MS	\N	\N
-687	Alice	Grindell	\N	STUDENT	12900	K	ES	\N	\N
-688	Emily	Grindell	\N	STUDENT	12061	2	ES	\N	\N
-689	Emilie	Abbonizio	\N	STUDENT	13016	11	HS	\N	\N
-690	Cassidy	Muttersbaugh	\N	STUDENT	13035	K	ES	\N	\N
-691	Magnolia	Muttersbaugh	\N	STUDENT	13034	3	ES	\N	\N
-692	Mathis	Bellamy	\N	STUDENT	12823	K	ES	\N	\N
-693	Maisha	Donne	\N	STUDENT	12590	11	HS	\N	\N
-694	Amanda	Romero Sánchez-Miranda	\N	STUDENT	12800	3	ES	\N	\N
-695	Candela	Romero	\N	STUDENT	12799	8	MS	\N	\N
-696	Nadia	Nora	\N	STUDENT	12860	11	HS	\N	\N
-697	Nayoon	Lee	\N	STUDENT	12626	5	ES	\N	\N
-698	Gaspard	Womble	\N	STUDENT	12718	1	ES	\N	\N
-699	Nile	Sudra	\N	STUDENT	13065	PK	ES	\N	\N
-700	Xinyi	Huang	\N	STUDENT	13074	1	ES	\N	\N
-701	Aabhar	Baral	\N	STUDENT	13030	5	ES	\N	\N
-702	Azza	Rollins	\N	STUDENT	12982	9	HS	\N	\N
-703	Bushra	Hussain	\N	STUDENT	13070	PK	ES	\N	\N
-704	Monika	Srutova	\N	STUDENT	12999	8	MS	\N	\N
-705	Nyx Verena	Houndeganme	\N	STUDENT	12815	6	MS	\N	\N
-706	Michael	Houndeganme	\N	STUDENT	12814	9	HS	\N	\N
-707	Crédo Terrence	Houndeganme	\N	STUDENT	12813	12	HS	\N	\N
-708	Zefyros	Patrikios	\N	STUDENT	13103	PK	ES	\N	\N
-709	Emilio	Trujillo	\N	STUDENT	13067	PK	ES	\N	\N
-710	Eitan	Segev	\N	STUDENT	12862	PK	ES	\N	\N
-711	Amitai	Segev	\N	STUDENT	12721	1	ES	\N	\N
-712	Karina	Maini	\N	STUDENT	12986	10	HS	\N	\N
-713	Elena	Moons	\N	STUDENT	12851	7	MS	\N	\N
-714	Aymen	Zeynu	\N	STUDENT	12809	3	ES	\N	\N
-715	Abem	Zeynu	\N	STUDENT	12552	7	MS	\N	\N
-716	Alan	Simek	\N	STUDENT	13015	8	MS	\N	\N
-717	Emil	Simek	\N	STUDENT	13014	11	HS	\N	\N
-718	Hachim	Gallagher	\N	STUDENT	13083	2	ES	\N	\N
-719	Kabir	Jaffer	\N	STUDENT	12646	K	ES	\N	\N
-720	Ayaan	Jaffer	\N	STUDENT	11646	4	ES	\N	\N
-721	Alifiya	Dawoodbhai	\N	STUDENT	12580	12	HS	\N	\N
-722	Ruth	Lindkvist	\N	STUDENT	12578	9	HS	\N	\N
-723	Adrian	Otieno	\N	STUDENT	12884	7	MS	\N	\N
-724	Aanya	Shah	\N	STUDENT	12583	8	MS	\N	\N
-20	Vera	Ashton	\N	STUDENT	11896	11	HS	\N	\N
-726	Nora	Schei	\N	STUDENT	12582	8	MS	\N	\N
-727	Jake	Schoneveld	\N	STUDENT	13086	PK	ES	\N	\N
-728	Roy	Gitiba	\N	STUDENT	12818	7	MS	\N	\N
-729	Kirk Wise	Gitiba	\N	STUDENT	12817	9	HS	\N	\N
-730	Isaiah	Geller	\N	STUDENT	12539	9	HS	\N	\N
-731	Bianca	Mbera	\N	STUDENT	12603	10	HS	\N	\N
-732	Kors	Ukumu	\N	STUDENT	12545	9	HS	\N	\N
-733	Jiya	Shah	\N	STUDENT	12857	8	MS	\N	\N
-734	Zayan	Karmali	\N	STUDENT	13098	10	HS	\N	\N
-735	Serenae	Angima	\N	STUDENT	12954	8	MS	\N	\N
-736	Fatoumatta	Fatty	\N	STUDENT	12735	12	HS	\N	\N
-737	Saone	Kwena	\N	STUDENT	12985	10	HS	\N	\N
-738	Howard	Wesley Iii	\N	STUDENT	12861	PK	ES	\N	\N
-739	Isabella	Mason	\N	STUDENT	12629	11	HS	\N	\N
-740	Ayana	Limpered	\N	STUDENT	13085	PK	ES	\N	\N
-741	Arielle	Limpered	\N	STUDENT	12795	2	ES	\N	\N
-742	Rakeb	Teklemichael	\N	STUDENT	12412	10	HS	\N	\N
-743	Pranai	Shah	\N	STUDENT	12987	11	HS	\N	\N
-744	Dhiya	Shah	\N	STUDENT	12541	7	MS	\N	\N
-745	Marianne	Roquebrune	\N	STUDENT	12644	PK	ES	\N	\N
-746	Nichelle	Somaia	\N	STUDENT	12842	1	ES	\N	\N
-747	Shivail	Somaia	\N	STUDENT	11769	4	ES	\N	\N
-748	Lukas	Stiles	\N	STUDENT	13068	PK	ES	\N	\N
-749	Nikolas	Stiles	\N	STUDENT	11137	5	ES	\N	\N
-750	Nathan	Matimu	\N	STUDENT	12979	9	HS	\N	\N
-751	Aristophanes	Abreu	\N	STUDENT	12895	K	ES	\N	\N
-752	Herson Alexandros	Abreu	\N	STUDENT	12896	1	ES	\N	\N
-753	Arthur	Bailey	\N	STUDENT	12825	9	HS	\N	\N
-754	Florrie	Bailey	\N	STUDENT	12812	11	HS	\N	\N
-755	Adam	Kone	\N	STUDENT	11368	10	HS	\N	\N
-756	Zahra	Kone	\N	STUDENT	11367	12	HS	\N	\N
-757	Thomas	Wimber	\N	STUDENT	12670	8	MS	\N	\N
-758	Rahmaan	Ali	\N	STUDENT	12755	12	HS	\N	\N
-759	Davran	Chowdhury	\N	STUDENT	13029	5	ES	\N	\N
-760	Nevzad	Chowdhury	\N	STUDENT	12868	11	HS	\N	\N
-761	Aariyana	Patel	\N	STUDENT	12553	9	HS	\N	\N
-762	Graham	Mueller	\N	STUDENT	12938	7	MS	\N	\N
-763	Willem	Mueller	\N	STUDENT	12937	9	HS	\N	\N
-764	Christian	Mueller	\N	STUDENT	12936	11	HS	\N	\N
-765	Libasse	Ndoye	\N	STUDENT	13075	8	MS	\N	\N
-766	Yi (Gavin)	Wang	\N	STUDENT	13020	3	ES	\N	\N
-767	Shuyi (Bella)	Wang	\N	STUDENT	12950	8	MS	\N	\N
-776	Taim	Hussain	\N	STUDENT	12899	K	ES	\N	\N
-777	Kaveer Singh	Hayer	\N	STUDENT	13048	2	ES	\N	\N
-778	Manvir Singh	Hayer	\N	STUDENT	12471	7	MS	\N	\N
-779	Ahmed Jabir	Bin Taif	\N	STUDENT	12898	K	ES	\N	\N
-780	Ahmed Jayed	Bin Taif	\N	STUDENT	12311	2	ES	\N	\N
-781	Ahmed Jawad	Bin Taif	\N	STUDENT	12312	5	ES	\N	\N
-782	Rebekah Ysabelle	Nas	\N	STUDENT	12978	9	HS	\N	\N
-783	Emilia	Husemann	\N	STUDENT	12949	8	MS	\N	\N
-784	Luna	Bonde-Nielsen	\N	STUDENT	12891	4	ES	\N	\N
-785	Naomi	Alemayehu	\N	STUDENT	13000	4	ES	\N	\N
-786	Arabella	Hales	\N	STUDENT	13105	PK	ES	\N	\N
-789	Zari	Khan	\N	STUDENT	13087	9	HS	\N	\N
-790	Cradle Terry	Alwedo	\N	STUDENT	13026	5	ES	\N	\N
-791	Felix	Braun	\N	STUDENT	13095	8	MS	\N	\N
-792	Io	Verstraete	\N	STUDENT	12998	10	HS	\N	\N
-793	Matthew	Crabtree	\N	STUDENT	12560	11	HS	\N	\N
-794	Kieu	Sansculotte	\N	STUDENT	12269	12	HS	\N	\N
-795	Daniel	Berkouwer	\N	STUDENT	12496	1	ES	\N	\N
-796	Kayla	Opere	\N	STUDENT	12820	PK	ES	\N	\N
-797	Léa	Berthellier-Antoine	\N	STUDENT	12794	1	ES	\N	\N
-798	Lukas	Kaseva	\N	STUDENT	13104	PK	ES	\N	\N
-799	Lauri	Kaseva	\N	STUDENT	13096	3	ES	\N	\N
-800	Layal	Khan	\N	STUDENT	12550	2	ES	\N	\N
-801	Ishbel	Croze	\N	STUDENT	13062	9	HS	\N	\N
-802	Emily	Croucher	\N	STUDENT	12873	5	ES	\N	\N
-803	Oliver	Croucher	\N	STUDENT	12874	7	MS	\N	\N
-804	Anabelle	Croucher	\N	STUDENT	12875	9	HS	\N	\N
-805	Vera	Olvik	\N	STUDENT	12953	8	MS	\N	\N
-806	Theodor	Skaaraas-Gjoelberg	\N	STUDENT	12845	1	ES	\N	\N
-807	Cedrik	Skaaraas-Gjoelberg	\N	STUDENT	12846	5	ES	\N	\N
-808	David	Lee	\N	STUDENT	13089	2	ES	\N	\N
-809	Sanaya	Jijina	\N	STUDENT	12736	12	HS	\N	\N
-810	Harshaan	Arora	\N	STUDENT	13010	8	MS	\N	\N
-811	Tisya	Arora	\N	STUDENT	13009	10	HS	\N	\N
-812	Gai	Elkana	\N	STUDENT	13001	1	ES	\N	\N
-813	Yuval	Elkana	\N	STUDENT	13002	3	ES	\N	\N
-814	Matan	Elkana	\N	STUDENT	13003	5	ES	\N	\N
-815	Niccolo	Nasidze	\N	STUDENT	12901	K	ES	\N	\N
-816	Jayesh	Aditya	\N	STUDENT	12472	8	MS	\N	\N
-817	Zara	Bredin	\N	STUDENT	11851	10	HS	\N	\N
-818	Mark	Lavack	\N	STUDENT	20817	8	MS	\N	\N
-819	Michael	Lavack	\N	STUDENT	26015	10	HS	\N	\N
-820	Rohin	Dodhia	\N	STUDENT	10820	11	HS	\N	\N
-821	Jaidyn	Bunch	\N	STUDENT	12508	11	HS	\N	\N
-822	Chalita	Victor	\N	STUDENT	12529	11	HS	\N	\N
-823	Hannah	Waalewijn	\N	STUDENT	12598	7	MS	\N	\N
-824	Simon	Waalewijn	\N	STUDENT	12596	11	HS	\N	\N
-825	Kaitlin	Wietecha	\N	STUDENT	12591	10	HS	\N	\N
-826	Saoirse	Molloy	\N	STUDENT	12702	2	ES	\N	\N
-827	Caelan	Molloy	\N	STUDENT	12701	4	ES	\N	\N
-828	Victor	Mollier-Camus	\N	STUDENT	12594	5	ES	\N	\N
-829	Elisa	Mollier-Camus	\N	STUDENT	12586	8	MS	\N	\N
-830	Jaishna	Varun	\N	STUDENT	12684	7	MS	\N	\N
-21	Nathan	Massawe	\N	STUDENT	11932	4	ES	\N	\N
-22	Noah	Massawe	\N	STUDENT	11933	8	MS	\N	\N
-23	Ziv	Bedein	\N	STUDENT	12746	K	ES	\N	\N
-24	Itai	Bedein	\N	STUDENT	12615	4	ES	\N	\N
-25	Annika	Purdy	\N	STUDENT	12345	2	ES	\N	\N
-26	Christiaan	Purdy	\N	STUDENT	12348	5	ES	\N	\N
-27	Gunnar	Purdy	\N	STUDENT	12349	8	MS	\N	\N
-28	Lana	Abou Hamda	\N	STUDENT	12780	5	ES	\N	\N
-29	Samer	Abou Hamda	\N	STUDENT	12779	8	MS	\N	\N
-30	Youssef	Abou Hamda	\N	STUDENT	12778	11	HS	\N	\N
-31	Ida-Marie	Andersen	\N	STUDENT	12075	12	HS	\N	\N
-831	Leah	Heijstee	\N	STUDENT	12782	3	ES	\N	\N
-832	Zara	Heijstee	\N	STUDENT	12781	8	MS	\N	\N
-833	Graciela	Sotiriou	\N	STUDENT	12902	K	ES	\N	\N
-834	Leonidas	Sotiriou	\N	STUDENT	12239	2	ES	\N	\N
-835	Evangelina	Barbacci	\N	STUDENT	12612	7	MS	\N	\N
-836	Gabriella	Barbacci	\N	STUDENT	12611	10	HS	\N	\N
-837	Santiago	Moyle	\N	STUDENT	12581	9	HS	\N	\N
-838	Alissa	Yakusik	\N	STUDENT	13082	4	ES	\N	\N
-839	Farah	Ghariani	\N	STUDENT	12662	9	HS	\N	\N
-840	Lillian	Cameron-Mutyaba	\N	STUDENT	12634	10	HS	\N	\N
-841	Rose	Cameron-Mutyaba	\N	STUDENT	12635	10	HS	\N	\N
-842	Nathan	Teferi	\N	STUDENT	12984	10	HS	\N	\N
-843	Angab	Mayar	\N	STUDENT	13057	11	HS	\N	\N
-844	Hanina	Abdosh	\N	STUDENT	12737	12	HS	\N	\N
-849	Liri	Alemu	\N	STUDENT	12732	3	ES	\N	\N
-850	Ishanvi	Ishanvi	\N	STUDENT	13053	K	ES	\N	\N
-878	Alexandre	Patenaude	\N	STUDENT	12743	K	ES	\N	\N
-879	Ren	Hirose	\N	STUDENT	13040	1	ES	\N	\N
-880	Abel	Johnson	\N	STUDENT	12767	1	ES	\N	\N
-881	Issa	Kane	\N	STUDENT	13037	1	ES	\N	\N
-882	Beatrix	Kiers	\N	STUDENT	12717	1	ES	\N	\N
-883	Yousif	Menkerios	\N	STUDENT	12459	1	ES	\N	\N
-884	Clayton	Oberjuerge	\N	STUDENT	12687	1	ES	\N	\N
-885	Yash	Pant	\N	STUDENT	12480	1	ES	\N	\N
-886	Amandla	Pijovic	\N	STUDENT	13090	1	ES	\N	\N
-887	Paola	Santos	\N	STUDENT	13094	1	ES	\N	\N
-888	Amaya	Sarfaraz	\N	STUDENT	12608	1	ES	\N	\N
-889	Clarice	Schrader	\N	STUDENT	12841	1	ES	\N	\N
-911	Uzima	Otieno	uotieno29@isk.ac.ke	STUDENT	13056	7	MS	\N	uotieno29
-924	Spencer	Schenck	sschenck30@isk.ac.ke	STUDENT	11457	6	MS	\N	sschenck30
-925	Isla	Willis	iwillis30@isk.ac.ke	STUDENT	12969	6	MS	\N	iwillis30
-926	Seya	Chandaria	schandaria30@isk.ac.ke	STUDENT	10775	6	MS	\N	schandaria30
-927	Malan	Chopra	mchopra30@isk.ac.ke	STUDENT	10508	6	MS	\N	mchopra30
-928	Lilla	Vestergaard	svestergaard30@isk.ac.ke	STUDENT	11266	6	MS	\N	svestergaard30
-890	Mandisa	Sobantu	\N	STUDENT	12939	1	ES	\N	\N
-891	Tasheni	Kamenga	\N	STUDENT	12877	2	ES	\N	\N
-892	Theodore	Patenaude	\N	STUDENT	12713	2	ES	\N	\N
-893	Ewyn	Soobrattee	\N	STUDENT	12714	2	ES	\N	\N
-894	Anna	Von Platen-Hallermund	\N	STUDENT	12888	2	ES	\N	\N
-895	Tristan	Wendelboe	\N	STUDENT	12527	2	ES	\N	\N
-896	Signe	Andersen	\N	STUDENT	12570	3	ES	\N	\N
-897	Holly	Asquith	\N	STUDENT	12944	3	ES	\N	\N
-898	Aurélien	Diop Weyer	\N	STUDENT	13033	3	ES	\N	\N
-899	Levi	Lundell	\N	STUDENT	12693	3	ES	\N	\N
-900	Santiago	Santos	\N	STUDENT	13093	3	ES	\N	\N
-901	Genevieve	Schrader	\N	STUDENT	12840	3	ES	\N	\N
-902	Martin	Vazquez Eraso	\N	STUDENT	12369	3	ES	\N	\N
-903	Magne	Vestergaard	\N	STUDENT	12664	3	ES	\N	\N
-904	Nanna	Vestergaard	\N	STUDENT	12665	3	ES	\N	\N
-905	Benjamin	Weill	\N	STUDENT	12849	3	ES	\N	\N
-906	Kira	Bailey	\N	STUDENT	12289	4	ES	\N	\N
-907	Aaryama	Bixby	\N	STUDENT	12850	4	ES	\N	\N
-908	Armelle	Carlevato	\N	STUDENT	12925	4	ES	\N	\N
-909	Sonia	Corbin	\N	STUDENT	12942	4	ES	\N	\N
-910	Zaria	Khalid	\N	STUDENT	12617	4	ES	\N	\N
-912	Carlos Laith	Farraj	\N	STUDENT	12607	4	ES	\N	\N
-913	Jarius	Farraj	\N	STUDENT	12606	11	HS	\N	\N
-914	Murad	Dadashev	\N	STUDENT	12768	8	MS	\N	\N
-915	Zubeyda	Dadasheva	\N	STUDENT	12769	12	HS	\N	\N
-916	Sumaiya	Iversen	\N	STUDENT	12433	12	HS	\N	\N
-917	Nike	Borg Aidnell	\N	STUDENT	12542	2	ES	\N	\N
-918	Siv	Borg Aidnell	\N	STUDENT	12543	2	ES	\N	\N
-919	Disa	Borg Aidnell	\N	STUDENT	12696	5	ES	\N	\N
-920	Ryan	Ellis	\N	STUDENT	12070	11	HS	\N	\N
-921	Adrienne	Ellis	\N	STUDENT	12068	12	HS	\N	\N
-922	Emalea	Hodge	\N	STUDENT	12192	5	ES	\N	\N
-923	Jip	Arens	\N	STUDENT	12430	12	HS	\N	\N
-2	Rosa Marie	Rosen	\N	STUDENT	11764	3	ES	\N	\N
-3	August	Rosen	\N	STUDENT	11845	9	HS	\N	\N
-4	Dawit	Abdissa	\N	STUDENT	13077	8	MS	\N	\N
-5	Meron	Abdissa	\N	STUDENT	13078	8	MS	\N	\N
-6	Yohanna Wondim Belachew	Andersen	\N	STUDENT	12966	1	ES	\N	\N
-7	Yonas Wondim Belachew	Andersen	\N	STUDENT	12968	10	HS	\N	\N
-768	Mariam	David-Tafida	\N	STUDENT	12715	2	ES	\N	\N
-769	James	Farrell	\N	STUDENT	12720	1	ES	\N	\N
-770	Anna Toft	Gronborg	\N	STUDENT	12801	K	ES	\N	\N
-771	Rocco	Sidari	\N	STUDENT	13036	2	ES	\N	\N
-772	David	Ajidahun	\N	STUDENT	13072	PK	ES	\N	\N
-773	Darian	Ajidahun	\N	STUDENT	12805	2	ES	\N	\N
-774	Annabelle	Ajidahun	\N	STUDENT	12804	4	ES	\N	\N
-775	Saif	Hussain	\N	STUDENT	12328	4	ES	\N	\N
-10	Kennedy	Armstrong	\N	STUDENT	12276	11	HS	\N	\N
-11	Lily	De Backer	\N	STUDENT	11856	10	HS	\N	\N
-12	Emma	Kuehnle	\N	STUDENT	11801	5	ES	\N	\N
-13	John (Trey)	Kuehnle	\N	STUDENT	11833	7	MS	\N	\N
-14	Rahsi	Abraha	\N	STUDENT	12465	4	ES	\N	\N
-15	Siyam	Abraha	\N	STUDENT	12464	8	MS	\N	\N
-16	Risty	Abraha	\N	STUDENT	12463	9	HS	\N	\N
-17	Seret	Abraha	\N	STUDENT	12462	12	HS	\N	\N
-996	Elijah	Lundell	\N	STUDENT	12692	5	ES	\N	\N
-851	Seher	Goyal	\N	STUDENT	12373	10	HS	\N	\N
-852	Michael Omar	Assi	\N	STUDENT	12917	7	MS	\N	\N
-853	Abhimanyu	Singh	\N	STUDENT	12728	2	ES	\N	\N
-854	Sifa	Otieno	\N	STUDENT	13013	12	HS	\N	\N
-855	Iman	Ibrahim	\N	STUDENT	12819	9	HS	\N	\N
-856	Tarquin	Mathews	\N	STUDENT	12994	11	HS	\N	\N
-857	Jia	Pandit	\N	STUDENT	10437	10	HS	\N	\N
-858	Josephine	Waugh	\N	STUDENT	12844	1	ES	\N	\N
-859	Rosemary	Waugh	\N	STUDENT	12843	4	ES	\N	\N
-860	Daudi	Kisukye	\N	STUDENT	13025	5	ES	\N	\N
-861	Gabriel	Kisukye	\N	STUDENT	12759	10	HS	\N	\N
-862	Aydin	Virani	\N	STUDENT	12483	3	ES	\N	\N
-863	Yasmin	Huysdens	\N	STUDENT	12927	7	MS	\N	\N
-864	Jacey	Huysdens	\N	STUDENT	12926	9	HS	\N	\N
-865	Esther	Schonemann	\N	STUDENT	13028	5	ES	\N	\N
-866	Nabou	Khouma	\N	STUDENT	13046	K	ES	\N	\N
-867	Khady	Khouma	\N	STUDENT	13045	3	ES	\N	\N
-868	Emily	Ellinger	\N	STUDENT	13102	5	ES	\N	\N
-869	Isaac	D'souza	\N	STUDENT	12501	8	MS	\N	\N
-870	Ezra	Kane	\N	STUDENT	13071	PK	ES	\N	\N
-871	Sapia	Pijovic	\N	STUDENT	13091	PK	ES	\N	\N
-872	Mubanga	Birschbach	\N	STUDENT	13052	K	ES	\N	\N
-873	Ben	Granot	\N	STUDENT	12748	K	ES	\N	\N
-874	Zyla	Khalid	\N	STUDENT	12747	K	ES	\N	\N
-875	Hannah	Kishiue-Turkstra	\N	STUDENT	12751	K	ES	\N	\N
-876	Alexander	Magnusson	\N	STUDENT	12824	K	ES	\N	\N
-877	Emerson	Nau	\N	STUDENT	12834	K	ES	\N	\N
-993	Alayna	Fritts	\N	STUDENT	12935	5	ES	\N	\N
-8	Cassandre	Camisa	\N	STUDENT	11881	9	HS	\N	\N
-9	Cole	Armstrong	\N	STUDENT	12277	7	MS	\N	\N
-997	Johannah	Mpatswe	\N	STUDENT	12700	5	ES	\N	\N
-998	Bella	Bergqvist	\N	STUDENT	12913	6	MS	\N	\N
-999	Bertram	Birk	\N	STUDENT	12699	6	MS	\N	\N
-1000	Elijah	Carey	\N	STUDENT	12923	6	MS	\N	\N
-1001	Eva	Ryan	\N	STUDENT	12618	6	MS	\N	\N
-1002	Mitchell	Bagenda	\N	STUDENT	12146	7	MS	\N	\N
-1003	Luka	Breda	\N	STUDENT	12183	7	MS	\N	\N
-1004	Paco	Breda	\N	STUDENT	12184	7	MS	\N	\N
-1005	Camille	Corbin	\N	STUDENT	12941	7	MS	\N	\N
-1006	Colin	Eldridge	\N	STUDENT	12974	7	MS	\N	\N
-1007	Maya	Ferede	\N	STUDENT	11726	7	MS	\N	\N
-1008	Ava	Fritts	\N	STUDENT	12928	7	MS	\N	\N
-1009	Mahiro	Kishiue	\N	STUDENT	12679	7	MS	\N	\N
-1010	Lola	Lemley	\N	STUDENT	12870	7	MS	\N	\N
-1011	Wesley	Oberjuerge	\N	STUDENT	12685	7	MS	\N	\N
-1012	Nicholas	Sobantu	\N	STUDENT	12940	7	MS	\N	\N
-1013	Elliot	Asquith	\N	STUDENT	12943	8	MS	\N	\N
-1014	Anshika	Basnet	\N	STUDENT	12450	8	MS	\N	\N
-1015	Fanny	Bergqvist	\N	STUDENT	12912	8	MS	\N	\N
-1016	Norah (Rebel)	Cizek	\N	STUDENT	12666	8	MS	\N	\N
-1017	Alexa	Janisse	\N	STUDENT	12675	8	MS	\N	\N
-1018	Tiago	Mendonca-Gray	\N	STUDENT	12948	8	MS	\N	\N
-1019	Alexa	Spitler	\N	STUDENT	12595	8	MS	\N	\N
-1020	Maia	Sykes	\N	STUDENT	12952	8	MS	\N	\N
-1021	Sonia	Weill	\N	STUDENT	12848	8	MS	\N	\N
-1022	Sienna	Zulberti	\N	STUDENT	12672	8	MS	\N	\N
-1023	Maya	Bagenda	\N	STUDENT	12147	9	HS	\N	\N
-1024	Muhammad Uneeb	Bakhshi	\N	STUDENT	12760	9	HS	\N	\N
-1025	Natasha	Birschbach	\N	STUDENT	13058	9	HS	\N	\N
-1026	Lara	Blanc Yeo	\N	STUDENT	12858	9	HS	\N	\N
-1027	Jai	Cherickel	\N	STUDENT	13006	9	HS	\N	\N
-1028	Samarth	Dalal	\N	STUDENT	12859	9	HS	\N	\N
-1029	Dan	Ephrem Yohannes	\N	STUDENT	11772	9	HS	\N	\N
-1030	Rowan	Hobbs	\N	STUDENT	12972	9	HS	\N	\N
-1031	Benjamin	Johansson-Desai	\N	STUDENT	13012	9	HS	\N	\N
-1032	Vashnie	Joymungul	\N	STUDENT	12996	9	HS	\N	\N
-1033	Sphesihle	Kamenga	\N	STUDENT	12876	9	HS	\N	\N
-1034	Seung Yoon	Nam	\N	STUDENT	13079	9	HS	\N	\N
-1035	Ishita	Rathore	\N	STUDENT	12983	9	HS	\N	\N
-1036	Nicholas	Rex	\N	STUDENT	10884	9	HS	\N	\N
-1037	Asbjørn	Vestergaard	\N	STUDENT	12663	9	HS	\N	\N
-1038	Filip	Adamec	\N	STUDENT	12904	10	HS	\N	\N
-1039	Solveig	Andersen	\N	STUDENT	12569	10	HS	\N	\N
-1040	Eugène	Astier	\N	STUDENT	12790	10	HS	\N	\N
-1041	Elsa	Bergqvist	\N	STUDENT	12911	10	HS	\N	\N
-1042	Maximilian	Chappell	\N	STUDENT	12576	10	HS	\N	\N
-1043	Charlotte	De Geer-Howard	\N	STUDENT	12653	10	HS	\N	\N
-1044	Aarish	Islam	\N	STUDENT	13008	10	HS	\N	\N
-1045	Daniel	Johansson-Desai	\N	STUDENT	13011	10	HS	\N	\N
-1046	Dario	Lawrence	\N	STUDENT	11438	10	HS	\N	\N
-1047	Maximo	Lemley	\N	STUDENT	12869	10	HS	\N	\N
-1048	Lila	Roquitte	\N	STUDENT	12555	10	HS	\N	\N
-1049	Mathilde	Scanlon	\N	STUDENT	12558	10	HS	\N	\N
-1050	Chisanga	Birschbach	\N	STUDENT	13055	11	HS	\N	\N
-1051	Wade	Eldridge	\N	STUDENT	12975	11	HS	\N	\N
-1052	Reem	Ephrem Yohannes	\N	STUDENT	11748	11	HS	\N	\N
-1053	Liam	Hobbs	\N	STUDENT	12971	11	HS	\N	\N
-1054	Daniel	Kadilli	\N	STUDENT	12991	11	HS	\N	\N
-1055	Jay Austin	Nimubona	\N	STUDENT	12749	11	HS	\N	\N
-1056	Anna Sophia	Stabrawa	\N	STUDENT	25052	11	HS	\N	\N
-1057	Elliot	Sykes	\N	STUDENT	12951	11	HS	\N	\N
-1058	Lalia	Sylla	\N	STUDENT	12628	11	HS	\N	\N
-1059	Camila	Valdivieso Santos	\N	STUDENT	12568	11	HS	\N	\N
-1060	Emma	Wright	\N	STUDENT	12567	11	HS	\N	\N
-1061	Dzidzor	Ata	\N	STUDENT	12651	12	HS	\N	\N
-1062	Nandini	Bhandari	\N	STUDENT	12738	12	HS	\N	\N
-1063	Isabella	De Geer-Howard	\N	STUDENT	12652	12	HS	\N	\N
-1064	Hanan	Khan	\N	STUDENT	10464	12	HS	\N	\N
-1065	Vincenzo	Lawrence	\N	STUDENT	11447	12	HS	\N	\N
-1066	Noah	Lutz	\N	STUDENT	24008	12	HS	\N	\N
-1067	Julian	Rex	\N	STUDENT	10922	12	HS	\N	\N
-1068	Luca	Scanlon	\N	STUDENT	12557	12	HS	\N	\N
-1069	Noah	Trenkle	\N	STUDENT	12556	12	HS	\N	\N
-1070	Theodore	Wright	twright28@isk.ac.ke	STUDENT	12566	8	MS	\N	twright28
-1071	Noah	Ochomo	nochomo@isk.ac.ke	MUSIC TA	\N	\N	MS	INSTRUMENT STORE	nochomo
-971	Sultan	Buksh	\N	STUDENT	11996	8	MS	\N	\N
-972	Olivia	Moons	\N	STUDENT	12852	4	ES	\N	\N
-985	Safiya	Menkerios	\N	STUDENT	11954	4	ES	\N	\N
-986	Tamas	Meyers	\N	STUDENT	12622	4	ES	\N	\N
-987	Arianna	Mucci	\N	STUDENT	12695	4	ES	\N	\N
-988	Graham	Oberjuerge	\N	STUDENT	12686	4	ES	\N	\N
-1072	DUMMY 1	STUDENT	\N	STUDENT	\N	\N	MS	\N	\N
-1074	DUMMY 1	STUDENT	\N	STUDENT	\N	\N	MS	\N	\N
-952	Yonatan Wondim Belachew	Andersen	ywondimandersen30@isk.ac.ke	STUDENT	12967	6	MS	\N	ywondimandersen30
-953	Yoonseo	Choi	ychoi30@isk.ac.ke	STUDENT	10708	6	MS	\N	ychoi30
-954	Evan	Daines	edaines30@isk.ac.ke>	STUDENT	13073	6	MS	\N	edaines30
-955	Holly	Mcmurtry	hmcmurtry30@isk.ac.ke	STUDENT	10817	6	MS	\N	hmcmurtry30
-956	Max	Stock	mstock30@isk.ac.ke	STUDENT	12915	6	MS	\N	mstock30
-957	Rowan	O'neill Calver	roneillcalver30@isk.ac.ke	STUDENT	11458	6	MS	\N	roneillcalver30
-958	Selma	Mensah	smensah30@isk.ac.ke	STUDENT	12392	6	MS	\N	smensah30
-959	Ainsley	Hire	ahire29@isk.ac.ke	STUDENT	10621	7	MS	\N	ahire29
-960	Aisha	Awori	aawori28@isk.ac.ke	STUDENT	10474	8	MS	\N	aawori28
-961	Caleb	Ross	cross28@isk.ac.ke	STUDENT	11677	8	MS	\N	cross28
-962	Ean	Kimuli	ekimuli29@isk.ac.ke	STUDENT	11703	7	MS	\N	ekimuli29
-963	Emiliana	Jensen	ejensen28@isk.ac.ke	STUDENT	11904	8	MS	\N	ejensen28
-964	Giancarlo	Biafore	gbiafore28@isk.ac.ke	STUDENT	12171	8	MS	\N	gbiafore28
-973	Seung Hyun	Nam	shyun-nam30@isk.ac.ke	STUDENT	13080	6	MS	\N	shyun-nam30
-974	Tanay	Cherickel	tcherickel30@isk.ac.ke	STUDENT	13007	6	MS	\N	tcherickel30
-975	Zayn	Khalid	zkhalid30@isk.ac.ke	STUDENT	12616	6	MS	\N	zkhalid30
-976	Balazs	Meyers	bmeyers30@isk.ac.ke	STUDENT	12621	6	MS	\N	bmeyers30
-977	Mahdiyah	Muneeb	mmuneeb30@isk.ac.ke	STUDENT	12761	6	MS	\N	mmuneeb30
-978	Mapalo	Birschbach	mbirschbach30@isk.ac.ke	STUDENT	13050	6	MS	\N	mbirschbach30
-979	Anastasia	Mulema	amulema30@isk.ac.ke	STUDENT	11622	6	MS	\N	amulema30
-980	Etienne	Carlevato	ecarlevato29@isk.ac.ke	STUDENT	12924	7	MS	\N	ecarlevato29
-981	Lauren	Mucci	lmucci30@isk.ac.ke	STUDENT	12694	6	MS	\N	lmucci30
-982	Seth	Lundell	slundell30@isk.ac.ke	STUDENT	12691	6	MS	\N	slundell30
-983	Evyn	Hobbs	ehobbs30@isk.ac.ke	STUDENT	12973	6	MS	\N	ehobbs30
-984	Nirvi	Joymungul	njoymungul29@isk.ac.ke	STUDENT	12997	7	MS	\N	njoymungul29
-1080	Rachel	Aondo	raondo@isk.ac.ke	MUSIC TEACHER	\N	\N	ES	LOWER ES MUSIC	raondo
-1079	Laois	Rogers	lrogers@isk.ac.ke	MUSIC TEACHER	\N	\N	ES	UPPER ES MUSIC	lrogers
-1078	Margaret	Oganda	moganda@isk.ac.ke	MUSIC TA	\N	\N	ES	UPPER ES MUSIC	moganda
-1077	Gwendolyn	Anding	ganding@isk.ac.ke	MUSIC TEACHER	\N	\N	HS	HS MUSIC	ganding
-1076	Mark	Anding	manding@isk.ac.ke	MUSIC TEACHER	\N	\N	MS	MS MUSIC	manding
-1075	Gakenia	Mucharie	gmucharie@isk.ac.ke	MUSIC TA	\N	\N	HS	HS MUSIC	gmucharie
-965	Joan	Awori	jawori28@isk.ac.ke	STUDENT	10475	8	MS	\N	jawori28
-966	Keza	Herman-Roloff	kherman-roloff29@isk.ac.ke	STUDENT	12196	7	MS	\N	kherman-roloff29
-967	Milan	Jayaram	mijayaram29@isk.ac.ke	STUDENT	10493	7	MS	\N	mijayaram29
-968	Nickolas	Jensen	njensen28@isk.ac.ke	STUDENT	11926	8	MS	\N	njensen28
-969	Noam	Waalewijn	nwaalewijn28@isk.ac.ke	STUDENT	12597	8	MS	\N	nwaalewijn28
-970	Wataru	Plunkett	wplunkett29@isk.ac.ke	STUDENT	12853	7	MS	\N	wplunkett29
-990	Penelope	Schrader	\N	STUDENT	12839	4	ES	\N	\N
-991	Rebecca	Von Platen-Hallermund	\N	STUDENT	12887	4	ES	\N	\N
-992	Sebastian	Chappell	\N	STUDENT	12577	5	ES	\N	\N
-994	Riley	Janisse	\N	STUDENT	12676	5	ES	\N	\N
-995	Adam	Johnson	\N	STUDENT	12327	5	ES	\N	\N
+COPY public.users (id, first_name, last_name, email, role, number, grade_level, division, room, username, active) FROM stdin;
+59	Vilma Doret	Rosen	vrosen30@isk.ac.ke	STUDENT	11763	6	MS	\N	vrosen30	t
+60	Elizabeth	Gardner	egardner29@isk.ac.ke	STUDENT	11467	7	MS	\N	egardner29	t
+61	Shai	Bedein	sbedein29@isk.ac.ke	STUDENT	12614	7	MS	\N	sbedein29	t
+114	Maartje	Stott	mstott30@isk.ac.ke	STUDENT	12519	6	MS	\N	mstott30	t
+115	Owen	Harris	oharris30@isk.ac.ke	STUDENT	12609	6	MS	\N	oharris30	t
+116	Alexander	Mogilnicki	amogilnicki29@isk.ac.ke	STUDENT	11480	7	MS	\N	amogilnicki29	t
+117	Cahir	Patel	cpatel29@isk.ac.ke	STUDENT	10772	7	MS	\N	cpatel29	t
+118	Ehsan	Akuete	eakuete28@isk.ac.ke	STUDENT	12156	8	MS	\N	eakuete28	t
+176	Lucile	Bamlango	lbamlango30@isk.ac.ke	STUDENT	10977	6	MS	\N	lbamlango30	t
+177	Tawheed	Hussain	thussain30@isk.ac.ke	STUDENT	11469	6	MS	\N	thussain30	t
+178	Florencia	Anding	fanding28@isk.ac.ke	STUDENT	10967	8	MS	\N	fanding28	t
+179	Tobias	Godfrey	tgodfrey29@isk.ac.ke	STUDENT	11227	7	MS	\N	tgodfrey29	t
+239	Stefanie	Landolt	slandolt30@isk.ac.ke	STUDENT	12286	6	MS	\N	slandolt30	t
+240	Arhum	Bid	abid30@isk.ac.ke	STUDENT	11706	6	MS	\N	abid30	t
+241	Hawi	Okwany	hokwany29@isk.ac.ke	STUDENT	10696	7	MS	\N	hokwany29	t
+298	Ayana	Butt	abutt30@isk.ac.ke	STUDENT	11402	6	MS	\N	abutt30	t
+299	Connor	Fort	cfort30@isk.ac.ke	STUDENT	11650	6	MS	\N	cfort30	t
+300	Ochieng	Simbiri	osimbiri30@isk.ac.ke	STUDENT	11265	6	MS	\N	osimbiri30	t
+301	Fatuma	Tall	ftall28@isk.ac.ke	STUDENT	11515	8	MS	\N	ftall28	t
+302	Jana	Landolt	jlandolt28@isk.ac.ke	STUDENT	12285	8	MS	\N	jlandolt28	t
+356	Anaiya	Shah	ashah30@isk.ac.ke	STUDENT	11264	6	MS	\N	ashah30	t
+357	Lilyrose	Trottier	ltrottier30@isk.ac.ke	STUDENT	11944	6	MS	\N	ltrottier30	t
+358	Lorian	Inglis	linglis30@isk.ac.ke	STUDENT	12133	6	MS	\N	linglis30	t
+359	Anne	Bamlango	abamlango28@isk.ac.ke	STUDENT	10978	8	MS	\N	abamlango28	t
+360	Arjan	Arora	aarora28@isk.ac.ke>	STUDENT	12130	8	MS	\N	aarora28	t
+361	Naomi	Yohannes	nyohannes29@isk.ac.ke	STUDENT	10787	7	MS	\N	nyohannes29	t
+421	Phuc Anh	Nguyen	pnguyen30@isk.ac.ke	STUDENT	11260	6	MS	\N	pnguyen30	t
+422	Aiden	Gremley	agremley29@isk.ac.ke	STUDENT	12393	7	MS	\N	agremley29	t
+1082	Kennedy	Wando	kwando@isk.ac.ke	INVENTORY MANAGER	\N	\N	\N	INSTRUMENT STORE	kwando	t
+480	Kai	O'Bra	kobra30@isk.ac.ke	STUDENT	12342	6	MS	\N	kobra30	t
+481	Luke	O'Hara	lohara30@isk.ac.ke	STUDENT	12063	6	MS	\N	lohara30	t
+482	Ansh	Mehta	amehta29@isk.ac.ke	STUDENT	10657	7	MS	\N	amehta29	t
+483	Isla	Goold	igoold28@isk.ac.ke	STUDENT	11836	8	MS	\N	igoold28	t
+538	Zecarun	Caminha	zcaminha30@isk.ac.ke	STUDENT	12081	6	MS	\N	zcaminha30	t
+539	Fatima	Zucca	fazucca30@isk.ac.ke	STUDENT	10566	6	MS	\N	fazucca30	t
+540	Grace	Njenga	gnjenga29@isk.ac.ke	STUDENT	12280	7	MS	\N	gnjenga29	t
+541	Natéa	Firzé Al Ghaoui	nfirzealghaoui29@isk.ac.ke	STUDENT	12190	7	MS	\N	nfirzealghaoui29	t
+601	Olivia	Patel	opatel30@isk.ac.ke	STUDENT	10561	6	MS	\N	opatel30	t
+602	Naia	Friedhoff Jaeschke	nfriedhoffjaeschke29@isk.ac.ke	STUDENT	11822	7	MS	\N	nfriedhoffjaeschke29	t
+659	Emilie	Wittmann	ewittmann30@isk.ac.ke	STUDENT	12428	6	MS	\N	ewittmann30	t
+660	Reehan	Reza	rreza30@isk.ac.ke	STUDENT	13022	6	MS	\N	rreza30	t
+661	Noga	Hercberg	nhercberg30@isk.ac.ke	STUDENT	12681	6	MS	\N	nhercberg30	t
+662	Emiel	Ghelani-Decorte	eghelani-decorte29@isk.ac.ke	STUDENT	12674	7	MS	\N	eghelani-decorte29	t
+663	Georgia	Dove	gdove30@isk.ac.ke	STUDENT	12922	6	MS	\N	gdove30	t
+725	Dongyoon	Lee	dlee30@isk.ac.ke	STUDENT	12627	6	MS	\N	dlee30	t
+787	Masoud	Ibrahim	mibrahim30@isk.ac.ke	STUDENT	13076	6	MS	\N	mibrahim30	t
+788	Titu	Tulga	ttulga30@isk.ac.ke	STUDENT	12756	6	MS	\N	ttulga30	t
+845	Harsha	Varun	hvarun30@isk.ac.ke	STUDENT	12683	6	MS	\N	hvarun30	t
+846	Sadie	Szuchman	sszuchman30@isk.ac.ke	STUDENT	12668	6	MS	\N	sszuchman30	t
+847	Maria	Agenorwot	magenorwot28@isk.ac.ke	STUDENT	13018	8	MS	\N	magenorwot28	t
+848	Reuben	Szuchman	rszuchman28@isk.ac.ke	STUDENT	12667	8	MS	\N	rszuchman28	t
+929	Moussa	Sangare	msangare30@isk.ac.ke	STUDENT	12427	6	MS	\N	msangare30	t
+930	Leo	Jansson	ljansson30@isk.ac.ke	STUDENT	11762	6	MS	\N	ljansson30	t
+931	Nora	Saleem	nsaleem30@isk.ac.ke	STUDENT	12619	6	MS	\N	nsaleem30	t
+932	Kaisei	Stephens	kstephens30@isk.ac.ke	STUDENT	11804	6	MS	\N	kstephens30	t
+933	Olivia	Freiin Von Handel	ovonhandel30@isk.ac.ke	STUDENT	12096	6	MS	\N	ovonhandel30	t
+934	Kiara	Materne	kmaterne30@isk.ac.ke	STUDENT	12152	6	MS	\N	kmaterne30	t
+935	Mikael	Eshetu	meshetu30@isk.ac.ke	STUDENT	12689	6	MS	\N	meshetu30	t
+936	Ignacio	Biafore	ibiafore30@isk.ac.ke	STUDENT	12170	6	MS	\N	ibiafore30	t
+937	Romilly	Haysmith	rhaysmith30@isk.ac.ke	STUDENT	12976	6	MS	\N	rhaysmith30	t
+938	Alexander	Wietecha	awietecha30@isk.ac.ke	STUDENT	12725	6	MS	\N	awietecha30	t
+939	Julian	Dibling	jdibling30@isk.ac.ke	STUDENT	12883	6	MS	\N	jdibling30	t
+940	Gaia	Bonde-Nielsen	gbondenielsen30@isk.ac.ke	STUDENT	12537	6	MS	\N	gbondenielsen30	t
+941	Kush	Tanna	ktanna30@isk.ac.ke	STUDENT	11096	6	MS	\N	ktanna30	t
+942	Saqer	Alnaqbi	salnaqbi30@isk.ac.ke	STUDENT	12909	6	MS	\N	salnaqbi30	t
+943	Jack	Mcmurtry	jmcmurtry30@isk.ac.ke	STUDENT	10812	6	MS	\N	jmcmurtry30	t
+944	Aiden	D'Souza	adsouza30@isk.ac.ke	STUDENT	12500	6	MS	\N	adsouza30	t
+945	Eliana	Hodge	ehodge29@isk.ac.ke	STUDENT	12193	7	MS	\N	ehodge29	t
+946	Abdul-Lateef Boluwatife (Bolu)	Dokunmu	adokunmu29@isk.ac.ke	STUDENT	11463	7	MS	\N	adokunmu29	t
+947	Anaiya	Khubchandani	akhubchandani30@isk.ac.ke	STUDENT	11262	6	MS	\N	akhubchandani30	t
+948	Ariel	Mutombo	amutombo30@isk.ac.ke	STUDENT	12549	6	MS	\N	amutombo30	t
+949	Edie	Cutler	ecutler30@isk.ac.ke	STUDENT	10686	6	MS	\N	ecutler30	t
+950	Eugénie	Camisa	ecamisa30@isk.ac.ke	STUDENT	11883	6	MS	\N	ecamisa30	t
+32	Cheryl	Cole	\N	STUDENT	12497	12	HS	\N	\N	t
+951	Finlay	Haswell	fhaswell30@isk.ac.ke	STUDENT	10562	6	MS	\N	fhaswell30	t
+1081	Nellie	Odera	\nnodera.sub@isk.ac.ke	SUBSTITUTE	\N	\N	\N	\N	\nnodera.sub	t
+18	Hugo	Ashton	\N	STUDENT	11902	6	MS	\N	\N	t
+33	Oria	Bunbury	\N	STUDENT	12247	K	ES	\N	\N	t
+625	Ruth	Dove	\N	STUDENT	12921	9	HS	\N	\N	t
+34	Dawon	Eom	\N	STUDENT	12733	10	HS	\N	\N	t
+35	Arnav	Mohan	\N	STUDENT	11925	12	HS	\N	\N	t
+36	Alexander	Roe	\N	STUDENT	12188	7	MS	\N	\N	t
+37	Elizabeth	Roe	\N	STUDENT	12186	9	HS	\N	\N	t
+38	Freja	Lindvig	\N	STUDENT	12535	5	ES	\N	\N	t
+39	Hana	Linck	\N	STUDENT	12559	12	HS	\N	\N	t
+40	Sif	Lindvig	\N	STUDENT	12502	8	MS	\N	\N	t
+41	Mimer	Lindvig	\N	STUDENT	12503	10	HS	\N	\N	t
+42	Frida	Weurlander	\N	STUDENT	12440	4	ES	\N	\N	t
+43	Zahra	Singh	\N	STUDENT	11505	9	HS	\N	\N	t
+44	Dylan	Zhang	\N	STUDENT	12206	1	ES	\N	\N	t
+45	Carys	Aubrey	\N	STUDENT	11838	8	MS	\N	\N	t
+46	Evie	Aubrey	\N	STUDENT	10950	12	HS	\N	\N	t
+47	Raeed	Mahmud	\N	STUDENT	11910	12	HS	\N	\N	t
+48	Kaleb	Mekonnen	\N	STUDENT	11185	5	ES	\N	\N	t
+49	Yonathan	Mekonnen	\N	STUDENT	11015	7	MS	\N	\N	t
+50	Aya	Mathers	\N	STUDENT	11793	4	ES	\N	\N	t
+51	Yui	Mathers	\N	STUDENT	11110	8	MS	\N	\N	t
+52	Madeleine	Gardner	\N	STUDENT	11468	5	ES	\N	\N	t
+53	Sofia	Russo	\N	STUDENT	11362	4	ES	\N	\N	t
+54	Leandro	Russo	\N	STUDENT	11361	8	MS	\N	\N	t
+55	Gerald	Murathi	\N	STUDENT	11724	4	ES	\N	\N	t
+56	Megan	Murathi	\N	STUDENT	11735	7	MS	\N	\N	t
+57	Eunice	Murathi	\N	STUDENT	11736	11	HS	\N	\N	t
+58	Abby Angelica	Manzano	\N	STUDENT	11479	7	MS	\N	\N	t
+62	Or	Alemu	\N	STUDENT	13005	K	ES	\N	\N	t
+63	Lillia	Bellamy	\N	STUDENT	11942	3	ES	\N	\N	t
+64	Destiny	Ouma	\N	STUDENT	10319	8	MS	\N	\N	t
+65	Louis	Ronzio	\N	STUDENT	12197	3	ES	\N	\N	t
+66	George	Ronzio	\N	STUDENT	12199	7	MS	\N	\N	t
+67	Andre	Awori	\N	STUDENT	24068	12	HS	\N	\N	t
+68	Krishi	Shah	\N	STUDENT	12121	10	HS	\N	\N	t
+69	Isabella	Fisher	\N	STUDENT	11416	9	HS	\N	\N	t
+70	Charles	Fisher	\N	STUDENT	11415	11	HS	\N	\N	t
+71	Joy	Mwangi	\N	STUDENT	10557	12	HS	\N	\N	t
+72	Hassan	Akuete	\N	STUDENT	11985	10	HS	\N	\N	t
+73	Leul	Alemu	\N	STUDENT	13004	5	ES	\N	\N	t
+74	Lisa	Otterstedt	\N	STUDENT	12336	12	HS	\N	\N	t
+75	Helena	Stott	\N	STUDENT	12520	9	HS	\N	\N	t
+76	Patrick	Stott	\N	STUDENT	12521	10	HS	\N	\N	t
+77	Isla	Kimani	\N	STUDENT	12397	K	ES	\N	\N	t
+78	Christodoulos	Van De Velden	\N	STUDENT	11788	3	ES	\N	\N	t
+79	Evangelia	Van De Velden	\N	STUDENT	10704	7	MS	\N	\N	t
+80	Sofia	Todd	\N	STUDENT	11731	2	ES	\N	\N	t
+81	Dominik	Mogilnicki	\N	STUDENT	11481	5	ES	\N	\N	t
+82	Kieran	Echalar	\N	STUDENT	12723	1	ES	\N	\N	t
+83	Liam	Echalar	\N	STUDENT	11882	4	ES	\N	\N	t
+84	Nova	Wilkes	\N	STUDENT	12750	PK	ES	\N	\N	t
+85	Maximilian	Freiherr Von Handel	\N	STUDENT	12095	11	HS	\N	\N	t
+86	Lucas	Lopez Abella	\N	STUDENT	11759	3	ES	\N	\N	t
+87	Mara	Lopez Abella	\N	STUDENT	11819	5	ES	\N	\N	t
+88	Cassius	Miller	\N	STUDENT	27007	9	HS	\N	\N	t
+89	Albert	Miller	\N	STUDENT	25051	11	HS	\N	\N	t
+90	Axel	Rose	\N	STUDENT	12753	PK	ES	\N	\N	t
+91	Evelyn	James	\N	STUDENT	10843	5	ES	\N	\N	t
+92	Ellis	Sudra	\N	STUDENT	11941	1	ES	\N	\N	t
+93	Arav	Shah	\N	STUDENT	10784	7	MS	\N	\N	t
+94	Lucia	Thornton	\N	STUDENT	12993	5	ES	\N	\N	t
+95	Robert	Thornton	\N	STUDENT	12992	7	MS	\N	\N	t
+96	Jeongu	Yun	\N	STUDENT	12492	2	ES	\N	\N	t
+97	Geonu	Yun	\N	STUDENT	12487	3	ES	\N	\N	t
+98	David	Carter	\N	STUDENT	11937	8	MS	\N	\N	t
+99	Gabrielle	Willis	\N	STUDENT	12970	5	ES	\N	\N	t
+100	Julian	Schmidlin Guerrero	\N	STUDENT	11803	5	ES	\N	\N	t
+101	Malaika	Awori	\N	STUDENT	10476	8	MS	\N	\N	t
+102	Aarav	Sagar	\N	STUDENT	12248	1	ES	\N	\N	t
+103	Indira	Sheridan	\N	STUDENT	11592	10	HS	\N	\N	t
+104	Erika	Sheridan	\N	STUDENT	11591	12	HS	\N	\N	t
+105	Téa	Andries-Munshi	\N	STUDENT	12798	K	ES	\N	\N	t
+106	Zaha	Andries-Munshi	\N	STUDENT	12788	3	ES	\N	\N	t
+107	Samir	Wallbridge	\N	STUDENT	10841	5	ES	\N	\N	t
+108	Lylah	Wallbridge	\N	STUDENT	20867	8	MS	\N	\N	t
+109	Oscar	Ansell	\N	STUDENT	12134	9	HS	\N	\N	t
+110	Louise	Ansell	\N	STUDENT	11852	10	HS	\N	\N	t
+111	Omar	Harris Ii	\N	STUDENT	12625	11	HS	\N	\N	t
+112	Boele	Hissink	\N	STUDENT	11003	5	ES	\N	\N	t
+113	Pomeline	Hissink	\N	STUDENT	10683	7	MS	\N	\N	t
+119	Ismail	Liban	\N	STUDENT	11647	7	MS	\N	\N	t
+120	Shreya	Tanna	\N	STUDENT	10703	8	MS	\N	\N	t
+121	Samuel	Clark	\N	STUDENT	13049	4	ES	\N	\N	t
+122	Ohad	Yarkoni	\N	STUDENT	12167	3	ES	\N	\N	t
+123	Matan	Yarkoni	\N	STUDENT	12168	5	ES	\N	\N	t
+124	Itay	Yarkoni	\N	STUDENT	12169	8	MS	\N	\N	t
+125	Yen	Nguyen	\N	STUDENT	11672	7	MS	\N	\N	t
+126	Binh	Nguyen	\N	STUDENT	11671	9	HS	\N	\N	t
+127	Shams	Hussain	\N	STUDENT	11496	3	ES	\N	\N	t
+128	Salam	Hussain	\N	STUDENT	11495	4	ES	\N	\N	t
+129	Basile	Pozzi	\N	STUDENT	10275	12	HS	\N	\N	t
+130	Ibrahim	Ibrahim	\N	STUDENT	11666	12	HS	\N	\N	t
+131	Mateo	Lopez Salazar	\N	STUDENT	12752	K	ES	\N	\N	t
+132	Benjamin	Godfrey	\N	STUDENT	11242	5	ES	\N	\N	t
+133	Jamal	Sana	\N	STUDENT	11525	11	HS	\N	\N	t
+134	Saba	Feizzadeh	\N	STUDENT	12872	4	ES	\N	\N	t
+135	Kasra	Feizzadeh	\N	STUDENT	12871	9	HS	\N	\N	t
+136	Kayla	Fazal	\N	STUDENT	12201	6	MS	\N	\N	t
+137	Alyssia	Fazal	\N	STUDENT	11878	8	MS	\N	\N	t
+138	Chloe	Foster	\N	STUDENT	11530	11	HS	\N	\N	t
+139	Joyous	Miyanue	\N	STUDENT	11582	10	HS	\N	\N	t
+140	Marvelous Peace	Nkahnue	\N	STUDENT	11583	12	HS	\N	\N	t
+141	Rafaelle	Patella Ross	\N	STUDENT	10707	7	MS	\N	\N	t
+142	Juna	Patella Ross	\N	STUDENT	10617	10	HS	\N	\N	t
+143	Tyler	Good	\N	STUDENT	12879	4	ES	\N	\N	t
+144	Julia	Good	\N	STUDENT	12878	8	MS	\N	\N	t
+145	Maria-Antonina (Jay)	Biesiada	\N	STUDENT	11723	10	HS	\N	\N	t
+146	Ben	Nannes	\N	STUDENT	10980	9	HS	\N	\N	t
+147	Kaiam	Hajee	\N	STUDENT	11520	5	ES	\N	\N	t
+148	Kadin	Hajee	\N	STUDENT	11542	7	MS	\N	\N	t
+149	Kahara	Hajee	\N	STUDENT	11541	8	MS	\N	\N	t
+150	Maria	Gebremedhin	\N	STUDENT	10688	6	MS	\N	\N	t
+151	Rainey	Copeland	\N	STUDENT	12003	12	HS	\N	\N	t
+152	Zawadi	Ndinguri	\N	STUDENT	11936	5	ES	\N	\N	t
+153	Max	De Jong	\N	STUDENT	24001	11	HS	\N	\N	t
+154	Maximiliano	Davis - Arana	\N	STUDENT	12372	1	ES	\N	\N	t
+155	Emilia	Nicolau Meganck	\N	STUDENT	12797	K	ES	\N	\N	t
+156	Zane	Anding	\N	STUDENT	10968	11	HS	\N	\N	t
+157	Otis	Rogers	\N	STUDENT	11940	1	ES	\N	\N	t
+158	Liam	Rogers	\N	STUDENT	12744	PK	ES	\N	\N	t
+159	Teagan	Wood	\N	STUDENT	10972	9	HS	\N	\N	t
+160	Caitlin	Wood	\N	STUDENT	10934	11	HS	\N	\N	t
+161	Anusha	Masrani	\N	STUDENT	10632	8	MS	\N	\N	t
+162	Jin	Handa	\N	STUDENT	10641	10	HS	\N	\N	t
+163	Lina	Fest	\N	STUDENT	10279	11	HS	\N	\N	t
+164	Marie	Fest	\N	STUDENT	10278	11	HS	\N	\N	t
+165	Divyaan	Ramrakha	\N	STUDENT	11830	7	MS	\N	\N	t
+166	Niyam	Ramrakha	\N	STUDENT	11379	10	HS	\N	\N	t
+167	Akeyo	Jayaram	\N	STUDENT	11404	3	ES	\N	\N	t
+168	Gendhis	Sapta	\N	STUDENT	10320	8	MS	\N	\N	t
+169	Kianna	Venkataya	\N	STUDENT	12706	4	ES	\N	\N	t
+170	Taegan	Line	\N	STUDENT	11627	7	MS	\N	\N	t
+171	Bronwyn	Line	\N	STUDENT	11626	9	HS	\N	\N	t
+172	Jamison	Line	\N	STUDENT	11625	11	HS	\N	\N	t
+173	Tangaaza	Mujuni	\N	STUDENT	10788	7	MS	\N	\N	t
+174	Rugaba	Mujuni	\N	STUDENT	20828	10	HS	\N	\N	t
+175	Laia	Guyard Suengas	\N	STUDENT	20805	11	HS	\N	\N	t
+180	Zeeon	Ahmed	\N	STUDENT	11570	12	HS	\N	\N	t
+181	Emily	Haswell	\N	STUDENT	27066	8	MS	\N	\N	t
+182	Yago	Dalla Vedova Sanjuan	\N	STUDENT	12444	12	HS	\N	\N	t
+183	Ariana	Choda	\N	STUDENT	10973	10	HS	\N	\N	t
+184	Isabella	Schmid	\N	STUDENT	10974	11	HS	\N	\N	t
+185	Sophia	Schmid	\N	STUDENT	10975	11	HS	\N	\N	t
+186	Kai	Ernst	\N	STUDENT	13043	K	ES	\N	\N	t
+187	Aika	Ernst	\N	STUDENT	11628	3	ES	\N	\N	t
+188	Amira	Varga	\N	STUDENT	11705	5	ES	\N	\N	t
+189	Jonah	Veverka	\N	STUDENT	12835	K	ES	\N	\N	t
+190	Theocles	Veverka	\N	STUDENT	12838	2	ES	\N	\N	t
+191	Adam-Angelo	Sankoh	\N	STUDENT	12441	3	ES	\N	\N	t
+192	Mwende	Mittelstadt	\N	STUDENT	11098	10	HS	\N	\N	t
+193	Miles	Charette	\N	STUDENT	20780	9	HS	\N	\N	t
+194	Tea	Charette	\N	STUDENT	20781	12	HS	\N	\N	t
+195	Drew (Tilly)	Giblin	\N	STUDENT	12963	2	ES	\N	\N	t
+196	Auberlin (Addie)	Giblin	\N	STUDENT	12964	7	MS	\N	\N	t
+197	Ryan	Burns	\N	STUDENT	11199	12	HS	\N	\N	t
+198	Bella	Jama	\N	STUDENT	12457	1	ES	\N	\N	t
+199	Ari	Jama	\N	STUDENT	12452	3	ES	\N	\N	t
+200	Isaiah	Marriott	\N	STUDENT	11572	12	HS	\N	\N	t
+201	Sianna	Byrne-Ilako	\N	STUDENT	11751	11	HS	\N	\N	t
+202	Camden	Teel	\N	STUDENT	12360	4	ES	\N	\N	t
+203	Jaidyn	Teel	\N	STUDENT	12361	6	MS	\N	\N	t
+204	Lukas	Eshetu	\N	STUDENT	12793	9	HS	\N	\N	t
+205	Dylan	Okanda	\N	STUDENT	11511	9	HS	\N	\N	t
+206	Sasha	Blaschke	\N	STUDENT	11599	4	ES	\N	\N	t
+207	Kaitlyn	Blaschke	\N	STUDENT	11052	6	MS	\N	\N	t
+208	Georges	Marin Fonseca Choucair Ramos	\N	STUDENT	12789	3	ES	\N	\N	t
+209	Maaya	Kobayashi	\N	STUDENT	11575	5	ES	\N	\N	t
+210	Isabel	Hansen Meiro	\N	STUDENT	11943	5	ES	\N	\N	t
+211	Finley	Eckert-Crosse	\N	STUDENT	11568	4	ES	\N	\N	t
+212	Mohammad Haroon	Bajwa	\N	STUDENT	10941	8	MS	\N	\N	t
+213	Erik	Suther	\N	STUDENT	10511	7	MS	\N	\N	t
+214	Aarav	Chandaria	\N	STUDENT	11792	4	ES	\N	\N	t
+215	Aarini Vijay	Chandaria	\N	STUDENT	10338	9	HS	\N	\N	t
+216	Leo	Korvenoja	\N	STUDENT	11526	11	HS	\N	\N	t
+217	Mandisa	Mathew	\N	STUDENT	10881	12	HS	\N	\N	t
+218	Hafsa	Ahmed	\N	STUDENT	12158	8	MS	\N	\N	t
+219	Mariam	Ahmed	\N	STUDENT	12159	8	MS	\N	\N	t
+220	Osman	Ahmed	\N	STUDENT	11745	12	HS	\N	\N	t
+221	Tessa	Steel	\N	STUDENT	12116	10	HS	\N	\N	t
+222	Ethan	Steel	\N	STUDENT	11442	12	HS	\N	\N	t
+223	Brianna	Otieno	\N	STUDENT	11271	8	MS	\N	\N	t
+224	Sohum	Bid	\N	STUDENT	13042	K	ES	\N	\N	t
+225	Yara	Janmohamed	\N	STUDENT	12173	4	ES	\N	\N	t
+226	Aila	Janmohamed	\N	STUDENT	12174	8	MS	\N	\N	t
+227	Rwenzori	Rogers	\N	STUDENT	12208	4	ES	\N	\N	t
+228	Junin	Rogers	\N	STUDENT	12209	5	ES	\N	\N	t
+229	Jasmine	Schoneveld	\N	STUDENT	11879	3	ES	\N	\N	t
+230	Hiyabel	Kefela	\N	STUDENT	11444	12	HS	\N	\N	t
+231	Arra	Manji	\N	STUDENT	12416	4	ES	\N	\N	t
+232	Deesha	Shah	\N	STUDENT	12108	10	HS	\N	\N	t
+233	Sidh	Rughani	\N	STUDENT	10770	9	HS	\N	\N	t
+234	Sohil	Chandaria	\N	STUDENT	12124	10	HS	\N	\N	t
+235	Imara	Patel	\N	STUDENT	12275	11	HS	\N	\N	t
+236	Riyaan	Wissanji	\N	STUDENT	11437	10	HS	\N	\N	t
+237	Mikayla	Wissanji	\N	STUDENT	11440	12	HS	\N	\N	t
+238	Leti	Bwonya	\N	STUDENT	12270	12	HS	\N	\N	t
+242	Mairi	Kurauchi	\N	STUDENT	11491	3	ES	\N	\N	t
+243	Meiya	Chandaria	\N	STUDENT	10932	5	ES	\N	\N	t
+244	Aiden	Inwani	\N	STUDENT	12531	11	HS	\N	\N	t
+245	Nirvaan	Shah	\N	STUDENT	10774	12	HS	\N	\N	t
+246	Ziya	Butt	\N	STUDENT	11401	9	HS	\N	\N	t
+247	Sofia	Shamji	\N	STUDENT	11839	8	MS	\N	\N	t
+248	Oumi	Tall	\N	STUDENT	11472	5	ES	\N	\N	t
+249	Yasmin	Price-Abdi	\N	STUDENT	10487	12	HS	\N	\N	t
+250	Kaitlyn	Fort	\N	STUDENT	11704	3	ES	\N	\N	t
+251	Keiya	Raja	\N	STUDENT	10637	8	MS	\N	\N	t
+252	Ryka	Shah	\N	STUDENT	10955	12	HS	\N	\N	t
+253	Ruby	Muoki	\N	STUDENT	12278	11	HS	\N	\N	t
+254	Siana	Chandaria	\N	STUDENT	25072	11	HS	\N	\N	t
+255	Tatyana	Wangari	\N	STUDENT	11877	12	HS	\N	\N	t
+256	Sohan	Shah	\N	STUDENT	11190	12	HS	\N	\N	t
+257	Zameer	Nanji	\N	STUDENT	10416	9	HS	\N	\N	t
+258	Esther	Paul	\N	STUDENT	11326	8	MS	\N	\N	t
+259	Liam	Sanders	\N	STUDENT	10430	10	HS	\N	\N	t
+260	Teresa	Sanders	\N	STUDENT	10431	12	HS	\N	\N	t
+261	Sarah	Melson	\N	STUDENT	12132	9	HS	\N	\N	t
+262	Kaysan Karim	Kurji	\N	STUDENT	12229	3	ES	\N	\N	t
+263	Ashi	Doshi	\N	STUDENT	11768	4	ES	\N	\N	t
+264	Anay	Doshi	\N	STUDENT	10636	8	MS	\N	\N	t
+265	Bianca	Bini	\N	STUDENT	12731	2	ES	\N	\N	t
+266	Otis	Cutler	\N	STUDENT	11535	4	ES	\N	\N	t
+267	Leo	Cutler	\N	STUDENT	10673	9	HS	\N	\N	t
+268	Andrew	Wachira	\N	STUDENT	20866	10	HS	\N	\N	t
+269	Jordan	Nzioka	\N	STUDENT	11884	2	ES	\N	\N	t
+270	Zuriel	Nzioka	\N	STUDENT	11313	4	ES	\N	\N	t
+271	Radek Tidi	Otieno	\N	STUDENT	10865	5	ES	\N	\N	t
+272	Ranam Telu	Otieno	\N	STUDENT	10943	5	ES	\N	\N	t
+273	Riani Tunu	Otieno	\N	STUDENT	10866	5	ES	\N	\N	t
+274	Sachin	Weaver	\N	STUDENT	10715	11	HS	\N	\N	t
+275	Mark	Landolt	\N	STUDENT	12284	8	MS	\N	\N	t
+276	Kianu	Ruiz Stannah	\N	STUDENT	10247	7	MS	\N	\N	t
+277	Tamia	Ruiz Stannah	\N	STUDENT	25032	11	HS	\N	\N	t
+278	Ahmad Eissa	Noordin	\N	STUDENT	11611	4	ES	\N	\N	t
+279	Lily	Herman-Roloff	\N	STUDENT	12194	3	ES	\N	\N	t
+280	Shela	Herman-Roloff	\N	STUDENT	12195	5	ES	\N	\N	t
+281	Bruke	Baheta	\N	STUDENT	10800	8	MS	\N	\N	t
+282	Helina	Baheta	\N	STUDENT	20766	11	HS	\N	\N	t
+283	Jonathan	Bjornholm	\N	STUDENT	11040	11	HS	\N	\N	t
+284	Rose	Vellenga	\N	STUDENT	11574	4	ES	\N	\N	t
+285	Solomon	Vellenga	\N	STUDENT	11573	5	ES	\N	\N	t
+286	Ishaan	Patel	\N	STUDENT	11255	4	ES	\N	\N	t
+287	Ciaran	Clements	\N	STUDENT	11843	8	MS	\N	\N	t
+288	Ahana	Nair	\N	STUDENT	12332	1	ES	\N	\N	t
+289	Aryaan	Pattni	\N	STUDENT	11729	4	ES	\N	\N	t
+290	Hana	Boxer	\N	STUDENT	11200	11	HS	\N	\N	t
+291	Parth	Shah	\N	STUDENT	10993	10	HS	\N	\N	t
+292	Layla	Khubchandani	\N	STUDENT	11263	9	HS	\N	\N	t
+293	Nikhil	Patel	\N	STUDENT	12494	1	ES	\N	\N	t
+294	Janak	Shah	\N	STUDENT	10830	11	HS	\N	\N	t
+295	Saba	Tunbridge	\N	STUDENT	10645	12	HS	\N	\N	t
+296	Shriya	Manek	\N	STUDENT	11777	11	HS	\N	\N	t
+297	Diane	Bamlango	\N	STUDENT	12371	K	ES	\N	\N	t
+303	Cecile	Bamlango	\N	STUDENT	10979	11	HS	\N	\N	t
+304	Vanaaya	Patel	\N	STUDENT	20839	9	HS	\N	\N	t
+305	Veer	Patel	\N	STUDENT	20840	9	HS	\N	\N	t
+306	Laina	Shah	\N	STUDENT	11502	4	ES	\N	\N	t
+307	Savir	Shah	\N	STUDENT	10965	7	MS	\N	\N	t
+308	Nikolaj	Vestergaard	\N	STUDENT	11789	3	ES	\N	\N	t
+309	Kian	Allport	\N	STUDENT	11445	12	HS	\N	\N	t
+310	Reid	Hagelberg	\N	STUDENT	12094	9	HS	\N	\N	t
+311	Zoe Rose	Hagelberg	\N	STUDENT	12077	11	HS	\N	\N	t
+312	Juju	Kimmelman-May	\N	STUDENT	12354	4	ES	\N	\N	t
+313	Chloe	Kimmelman-May	\N	STUDENT	12353	8	MS	\N	\N	t
+314	Tara	Uberoi	\N	STUDENT	11452	11	HS	\N	\N	t
+315	Chansa	Mwenya	\N	STUDENT	24018	12	HS	\N	\N	t
+316	Liam	Patel	\N	STUDENT	11486	4	ES	\N	\N	t
+317	Shane	Patel	\N	STUDENT	10138	8	MS	\N	\N	t
+318	Rhiyana	Patel	\N	STUDENT	26025	10	HS	\N	\N	t
+319	Yash	Pattni	\N	STUDENT	10334	7	MS	\N	\N	t
+320	Gaurav	Samani	\N	STUDENT	11179	5	ES	\N	\N	t
+321	Siddharth	Samani	\N	STUDENT	11180	5	ES	\N	\N	t
+322	Kiara	Bhandari	\N	STUDENT	10791	9	HS	\N	\N	t
+323	Safa	Monadjem	\N	STUDENT	12224	3	ES	\N	\N	t
+324	Malaika	Monadjem	\N	STUDENT	25076	11	HS	\N	\N	t
+325	Sam	Khagram	\N	STUDENT	11858	10	HS	\N	\N	t
+326	Radha	Shah	\N	STUDENT	10786	7	MS	\N	\N	t
+327	Vishnu	Shah	\N	STUDENT	10796	10	HS	\N	\N	t
+328	Cuyuni	Khan	\N	STUDENT	12013	10	HS	\N	\N	t
+329	Lengai	Inglis	\N	STUDENT	12131	9	HS	\N	\N	t
+330	Mathias	Yohannes	\N	STUDENT	20875	10	HS	\N	\N	t
+331	Avish	Arora	\N	STUDENT	12129	9	HS	\N	\N	t
+332	Saptha Girish	Bommadevara	\N	STUDENT	10504	10	HS	\N	\N	t
+333	Sharmila Devi	Bommadevara	\N	STUDENT	10505	12	HS	\N	\N	t
+334	Adama	Sangare	\N	STUDENT	12309	11	HS	\N	\N	t
+335	Gabrielle	Trottier	\N	STUDENT	11945	9	HS	\N	\N	t
+336	Mannat	Suri	\N	STUDENT	11485	4	ES	\N	\N	t
+337	Armaan	Suri	\N	STUDENT	11076	7	MS	\N	\N	t
+338	Zoe	Furness	\N	STUDENT	11101	12	HS	\N	\N	t
+339	Tandin	Tshomo	\N	STUDENT	12442	7	MS	\N	\N	t
+340	Thuji	Zangmo	\N	STUDENT	12394	8	MS	\N	\N	t
+341	Maxym	Berezhny	\N	STUDENT	10878	9	HS	\N	\N	t
+342	Thomas	Higgins	\N	STUDENT	11744	10	HS	\N	\N	t
+343	Louisa	Higgins	\N	STUDENT	11743	12	HS	\N	\N	t
+344	Indhira	Startup	\N	STUDENT	12244	2	ES	\N	\N	t
+345	Anyamarie	Lindgren	\N	STUDENT	11389	8	MS	\N	\N	t
+346	Takumi	Plunkett	\N	STUDENT	12854	8	MS	\N	\N	t
+347	Catherina	Gagnidze	\N	STUDENT	11556	12	HS	\N	\N	t
+348	Adam	Jama	\N	STUDENT	11676	2	ES	\N	\N	t
+349	Amina	Jama	\N	STUDENT	11675	4	ES	\N	\N	t
+350	Guled	Jama	\N	STUDENT	12757	6	MS	\N	\N	t
+351	Noha	Salituri	\N	STUDENT	12211	1	ES	\N	\N	t
+352	Amaia	Salituri	\N	STUDENT	12212	4	ES	\N	\N	t
+353	Leone	Salituri	\N	STUDENT	12213	4	ES	\N	\N	t
+354	Sorawit (Nico)	Thongmod	\N	STUDENT	12214	5	ES	\N	\N	t
+355	Henk	Makimei	\N	STUDENT	11860	12	HS	\N	\N	t
+989	Patrick	Ryan	\N	STUDENT	12816	4	ES	\N	\N	t
+362	Mira	Maldonado	\N	STUDENT	11175	10	HS	\N	\N	t
+363	Che	Maldonado	\N	STUDENT	11170	12	HS	\N	\N	t
+364	Phuong An	Nguyen	\N	STUDENT	11261	4	ES	\N	\N	t
+365	Charlotte	Smith	\N	STUDENT	12705	4	ES	\N	\N	t
+366	Olivia	Von Strauss	\N	STUDENT	12719	1	ES	\N	\N	t
+367	Gabriel	Petrangeli	\N	STUDENT	11009	12	HS	\N	\N	t
+368	Jihwan	Hwang	\N	STUDENT	11951	5	ES	\N	\N	t
+369	Anneka	Hornor	\N	STUDENT	12377	10	HS	\N	\N	t
+370	Florencia	Veveiros	\N	STUDENT	12008	5	ES	\N	\N	t
+371	Xavier	Veveiros	\N	STUDENT	12009	10	HS	\N	\N	t
+372	Laras	Clark	\N	STUDENT	11786	3	ES	\N	\N	t
+373	Galuh	Clark	\N	STUDENT	11787	7	MS	\N	\N	t
+374	Miriam	Schwabel	\N	STUDENT	12267	12	HS	\N	\N	t
+375	Ben	Gremley	\N	STUDENT	12113	10	HS	\N	\N	t
+376	Calvin	Gremley	\N	STUDENT	12115	10	HS	\N	\N	t
+377	Danial	Baig-Giannotti	\N	STUDENT	12546	1	ES	\N	\N	t
+378	Daria	Baig-Giannotti	\N	STUDENT	11593	4	ES	\N	\N	t
+379	Ciara	Jackson	\N	STUDENT	12071	11	HS	\N	\N	t
+380	Ansley	Nelson	\N	STUDENT	12806	1	ES	\N	\N	t
+381	Caroline	Nelson	\N	STUDENT	12803	4	ES	\N	\N	t
+382	Tamara	Wanyoike	\N	STUDENT	12658	11	HS	\N	\N	t
+383	Marcella	Cowan	\N	STUDENT	12437	8	MS	\N	\N	t
+384	Alisia	Sommerlund	\N	STUDENT	11717	7	MS	\N	\N	t
+385	Lea	Castel-Wang	\N	STUDENT	12507	10	HS	\N	\N	t
+386	Anisha	Som Chaudhuri	\N	STUDENT	12707	4	ES	\N	\N	t
+387	Gloria	Jacques	\N	STUDENT	12067	11	HS	\N	\N	t
+388	Dana	Nurshaikhova	\N	STUDENT	11938	9	HS	\N	\N	t
+389	Raheel	Shah	\N	STUDENT	12161	8	MS	\N	\N	t
+390	Rohan	Shah	\N	STUDENT	20850	10	HS	\N	\N	t
+391	Malou	Burmester	\N	STUDENT	11395	5	ES	\N	\N	t
+392	Nicholas	Burmester	\N	STUDENT	11394	8	MS	\N	\N	t
+393	Ethan	Sengendo	\N	STUDENT	11702	10	HS	\N	\N	t
+394	Omer	Osman	\N	STUDENT	12443	1	ES	\N	\N	t
+395	Felix	Jensen	\N	STUDENT	12238	2	ES	\N	\N	t
+396	Fiona	Jensen	\N	STUDENT	12237	3	ES	\N	\N	t
+397	Andrew	Gerba	\N	STUDENT	11462	7	MS	\N	\N	t
+398	Madigan	Gerba	\N	STUDENT	11507	9	HS	\N	\N	t
+399	Porter	Gerba	\N	STUDENT	11449	11	HS	\N	\N	t
+400	Aaron	Atamuradov	\N	STUDENT	11800	5	ES	\N	\N	t
+401	Arina	Atamuradova	\N	STUDENT	11752	11	HS	\N	\N	t
+402	Seojun	Yoon	\N	STUDENT	12792	7	MS	\N	\N	t
+403	Seohyeon	Yoon	\N	STUDENT	12791	9	HS	\N	\N	t
+404	Sasha	Allard Ruiz	\N	STUDENT	11387	12	HS	\N	\N	t
+405	Ali	Alnaqbi	\N	STUDENT	12910	2	ES	\N	\N	t
+406	Almayasa	Alnaqbi	\N	STUDENT	12908	7	MS	\N	\N	t
+407	Fatima	Alnaqbi	\N	STUDENT	12907	9	HS	\N	\N	t
+408	Ibrahim	Alnaqbi	\N	STUDENT	12906	10	HS	\N	\N	t
+409	Rasmus	Jabbour	\N	STUDENT	12396	1	ES	\N	\N	t
+410	Olivia	Jabbour	\N	STUDENT	12395	4	ES	\N	\N	t
+411	Tobin	Allen	\N	STUDENT	12308	9	HS	\N	\N	t
+412	Corinne	Allen	\N	STUDENT	12307	12	HS	\N	\N	t
+413	Maya	Ben Anat	\N	STUDENT	12643	PK	ES	\N	\N	t
+414	Ella	Ben Anat	\N	STUDENT	11475	5	ES	\N	\N	t
+415	Shira	Ben Anat	\N	STUDENT	11518	8	MS	\N	\N	t
+416	Amishi	Mishra	\N	STUDENT	12489	12	HS	\N	\N	t
+417	Arushi	Mishra	\N	STUDENT	12488	12	HS	\N	\N	t
+418	Riley	O'neill Calver	\N	STUDENT	11488	4	ES	\N	\N	t
+419	Lukas	Norman	\N	STUDENT	11534	10	HS	\N	\N	t
+420	Lise	Norman	\N	STUDENT	11533	12	HS	\N	\N	t
+423	Ella	Sims	\N	STUDENT	24043	12	HS	\N	\N	t
+424	Sebastian	Wikenczy Thomsen	\N	STUDENT	11446	11	HS	\N	\N	t
+425	Logan Lilly	Foley	\N	STUDENT	11758	3	ES	\N	\N	t
+426	James	Mills	\N	STUDENT	12376	11	HS	\N	\N	t
+427	Amira	Goold	\N	STUDENT	11820	5	ES	\N	\N	t
+428	Micaella	Shenge	\N	STUDENT	11527	6	MS	\N	\N	t
+429	Siri	Huber	\N	STUDENT	12338	5	ES	\N	\N	t
+430	Lisa	Huber	\N	STUDENT	12339	9	HS	\N	\N	t
+431	Jara	Huber	\N	STUDENT	12340	10	HS	\N	\N	t
+432	Case	O'hearn	\N	STUDENT	12764	7	MS	\N	\N	t
+433	Maeve	O'hearn	\N	STUDENT	12763	10	HS	\N	\N	t
+434	Komborero	Chigudu	\N	STUDENT	11375	5	ES	\N	\N	t
+435	Munashe	Chigudu	\N	STUDENT	11376	8	MS	\N	\N	t
+436	Nyasha	Chigudu	\N	STUDENT	11373	11	HS	\N	\N	t
+437	Kodjiro	Sakaedani Petrovic	\N	STUDENT	12271	11	HS	\N	\N	t
+438	Ines Clelia	Essoungou	\N	STUDENT	12522	10	HS	\N	\N	t
+439	Caspian	Mcsharry	\N	STUDENT	12562	5	ES	\N	\N	t
+440	Theodore	Mcsharry	\N	STUDENT	12563	9	HS	\N	\N	t
+441	Joshua	Exel	\N	STUDENT	12073	10	HS	\N	\N	t
+442	Hannah	Exel	\N	STUDENT	12074	12	HS	\N	\N	t
+443	Sumedh Vedya	Vutukuru	\N	STUDENT	11569	12	HS	\N	\N	t
+444	Nyasha	Mabaso	\N	STUDENT	11657	5	ES	\N	\N	t
+445	Jack	Young	\N	STUDENT	12323	8	MS	\N	\N	t
+446	Annie	Young	\N	STUDENT	12378	11	HS	\N	\N	t
+447	Sofia	Peck	\N	STUDENT	11892	12	HS	\N	\N	t
+448	Elia	O'hara	\N	STUDENT	12062	11	HS	\N	\N	t
+449	Becca	Friedman	\N	STUDENT	12200	5	ES	\N	\N	t
+450	Nandipha	Murape	\N	STUDENT	11700	11	HS	\N	\N	t
+451	Sarah	Van Der Vliet	\N	STUDENT	11630	7	MS	\N	\N	t
+452	Grecy	Van Der Vliet	\N	STUDENT	11629	12	HS	\N	\N	t
+453	Maila	Giri	\N	STUDENT	12421	3	ES	\N	\N	t
+454	Rohan	Giri	\N	STUDENT	12410	10	HS	\N	\N	t
+455	Ao	Kasahara	\N	STUDENT	13041	K	ES	\N	\N	t
+456	Leonard	Laurits	\N	STUDENT	12250	1	ES	\N	\N	t
+457	Charlotte	Laurits	\N	STUDENT	12249	3	ES	\N	\N	t
+458	Kai	Jansson	\N	STUDENT	11761	3	ES	\N	\N	t
+459	Ines Elise	Hansen	\N	STUDENT	12363	2	ES	\N	\N	t
+460	Marius	Hansen	\N	STUDENT	12365	6	MS	\N	\N	t
+461	Minseo	Choi	\N	STUDENT	11145	4	ES	\N	\N	t
+462	Abigail	Tassew	\N	STUDENT	12637	3	ES	\N	\N	t
+463	Nathan	Tassew	\N	STUDENT	12636	10	HS	\N	\N	t
+464	Catherine	Johnson	\N	STUDENT	12867	1	ES	\N	\N	t
+465	Brycelyn	Johnson	\N	STUDENT	12866	6	MS	\N	\N	t
+466	Azzalina	Johnson	\N	STUDENT	12865	10	HS	\N	\N	t
+467	Aaditya	Raja	\N	STUDENT	12103	10	HS	\N	\N	t
+468	Leila	Priestley	\N	STUDENT	20843	11	HS	\N	\N	t
+469	Saron	Piper	\N	STUDENT	25038	11	HS	\N	\N	t
+470	Maxwell	Mazibuko	\N	STUDENT	12574	10	HS	\N	\N	t
+471	Naledi	Mazibuko	\N	STUDENT	12573	10	HS	\N	\N	t
+472	Sechaba	Mazibuko	\N	STUDENT	12575	10	HS	\N	\N	t
+473	Ananya	Raval	\N	STUDENT	12257	1	ES	\N	\N	t
+474	Christopher Ross	Donohue	\N	STUDENT	10333	7	MS	\N	\N	t
+475	Luna	Cooney	\N	STUDENT	12111	3	ES	\N	\N	t
+476	Maïa	Cooney	\N	STUDENT	12110	10	HS	\N	\N	t
+477	Danaé	Materne	\N	STUDENT	12154	9	HS	\N	\N	t
+478	Ameya	Dale	\N	STUDENT	10495	11	HS	\N	\N	t
+479	Arthur	Hire	\N	STUDENT	11232	4	ES	\N	\N	t
+484	Akshith	Sekar	\N	STUDENT	10676	10	HS	\N	\N	t
+485	Elsa	Lloyd	\N	STUDENT	11464	7	MS	\N	\N	t
+486	Laé	Firzé Al Ghaoui	\N	STUDENT	12191	5	ES	\N	\N	t
+487	Alessia	Quacquarella	\N	STUDENT	11461	5	ES	\N	\N	t
+488	Hamish	Ledgard	\N	STUDENT	12268	12	HS	\N	\N	t
+489	Sophia	Shahbal	\N	STUDENT	12742	K	ES	\N	\N	t
+490	Saif	Shahbal	\N	STUDENT	12712	2	ES	\N	\N	t
+491	Jonathan	Rwehumbiza	\N	STUDENT	11854	10	HS	\N	\N	t
+492	Simone	Eidex	\N	STUDENT	11897	11	HS	\N	\N	t
+493	Alston	Schenck	\N	STUDENT	11484	4	ES	\N	\N	t
+494	Troy	Hopps	\N	STUDENT	12306	3	ES	\N	\N	t
+495	Noah	Hughes	\N	STUDENT	10477	11	HS	\N	\N	t
+496	Maximus	Njenga	\N	STUDENT	12303	2	ES	\N	\N	t
+497	Sadie	Njenga	\N	STUDENT	12279	5	ES	\N	\N	t
+498	Justin	Njenga	\N	STUDENT	12281	10	HS	\N	\N	t
+499	Daniel	Jensen	\N	STUDENT	11898	10	HS	\N	\N	t
+500	Maya	Thibodeau	\N	STUDENT	12357	8	MS	\N	\N	t
+501	Lorenzo	De Vries Aguirre	\N	STUDENT	11552	9	HS	\N	\N	t
+502	Marco	De Vries Aguirre	\N	STUDENT	11551	12	HS	\N	\N	t
+503	Adam	Saleem	\N	STUDENT	12620	2	ES	\N	\N	t
+504	Emir	Abdellahi	\N	STUDENT	11605	11	HS	\N	\N	t
+505	Maliah	O'neal	\N	STUDENT	11912	8	MS	\N	\N	t
+506	Caio	Kraemer	\N	STUDENT	11906	9	HS	\N	\N	t
+507	Isabela	Kraemer	\N	STUDENT	11907	12	HS	\N	\N	t
+508	Eva	Bannikau	\N	STUDENT	11780	4	ES	\N	\N	t
+509	Alba	Prawitz	\N	STUDENT	12291	2	ES	\N	\N	t
+510	Max	Prawitz	\N	STUDENT	12298	5	ES	\N	\N	t
+511	Leo	Prawitz	\N	STUDENT	12297	6	MS	\N	\N	t
+512	Abigail	Holder	\N	STUDENT	12060	5	ES	\N	\N	t
+513	Charles	Holder	\N	STUDENT	12059	11	HS	\N	\N	t
+514	Isabel	Holder	\N	STUDENT	12056	12	HS	\N	\N	t
+515	Sebastian	Ansorg	\N	STUDENT	12656	7	MS	\N	\N	t
+516	Leon	Ansorg	\N	STUDENT	12655	11	HS	\N	\N	t
+517	Pilar	Bosch	\N	STUDENT	12217	K	ES	\N	\N	t
+518	Moira	Bosch	\N	STUDENT	12218	2	ES	\N	\N	t
+519	Blanca	Bosch	\N	STUDENT	12219	4	ES	\N	\N	t
+520	Aven	Ross	\N	STUDENT	11678	7	MS	\N	\N	t
+521	Kai	Herbst	\N	STUDENT	12231	2	ES	\N	\N	t
+522	Sofia	Herbst	\N	STUDENT	12230	4	ES	\N	\N	t
+523	Michael	Bierly	\N	STUDENT	12179	8	MS	\N	\N	t
+524	Miya	Stephens	\N	STUDENT	11802	5	ES	\N	\N	t
+525	Jihong	Joo	\N	STUDENT	11686	10	HS	\N	\N	t
+526	Hyojin	Joo	\N	STUDENT	11685	12	HS	\N	\N	t
+527	Bruno	Sottsas	\N	STUDENT	12358	4	ES	\N	\N	t
+528	Natasha	Sottsas	\N	STUDENT	12359	7	MS	\N	\N	t
+19	Theodore	Ashton	\N	STUDENT	11893	9	HS	\N	\N	t
+529	Krishna	Gandhi	\N	STUDENT	12525	10	HS	\N	\N	t
+530	Hrushikesh	Gandhi	\N	STUDENT	12524	12	HS	\N	\N	t
+531	Max	Leon	\N	STUDENT	12490	12	HS	\N	\N	t
+532	Myra	Korngold	\N	STUDENT	12775	5	ES	\N	\N	t
+533	Mila Ruth	Korngold	\N	STUDENT	12773	7	MS	\N	\N	t
+534	Alexander	Tarquini	\N	STUDENT	12223	4	ES	\N	\N	t
+535	Marian	Abukari	\N	STUDENT	10602	7	MS	\N	\N	t
+536	Manuela	Abukari	\N	STUDENT	10672	9	HS	\N	\N	t
+537	Soren	Mansourian	\N	STUDENT	12470	1	ES	\N	\N	t
+542	Manali	Caminha	\N	STUDENT	12079	9	HS	\N	\N	t
+543	Nomi	Leca Turner	\N	STUDENT	12894	PK	ES	\N	\N	t
+544	Enzo	Leca Turner	\N	STUDENT	12893	1	ES	\N	\N	t
+545	Kelsie	Karuga	\N	STUDENT	12162	6	MS	\N	\N	t
+546	Kayla	Karuga	\N	STUDENT	12163	8	MS	\N	\N	t
+547	Tamar	Jones-Avni	\N	STUDENT	12897	K	ES	\N	\N	t
+548	Dov	Jones-Avni	\N	STUDENT	12784	2	ES	\N	\N	t
+549	Nahal	Jones-Avni	\N	STUDENT	12783	4	ES	\N	\N	t
+550	Noa	Godden	\N	STUDENT	12504	5	ES	\N	\N	t
+551	Emma	Godden	\N	STUDENT	12479	9	HS	\N	\N	t
+552	Lisa	Godden	\N	STUDENT	12478	10	HS	\N	\N	t
+553	Ella	Acharya	\N	STUDENT	12882	1	ES	\N	\N	t
+554	Anshi	Acharya	\N	STUDENT	12881	7	MS	\N	\N	t
+555	Clara	Hardy	\N	STUDENT	12722	1	ES	\N	\N	t
+556	Safari	Dara	\N	STUDENT	11958	4	ES	\N	\N	t
+557	Moira	Koucheravy	\N	STUDENT	12305	4	ES	\N	\N	t
+558	Carys	Koucheravy	\N	STUDENT	12304	8	MS	\N	\N	t
+559	Edouard	Germain	\N	STUDENT	12258	11	HS	\N	\N	t
+560	Jacob	Germain	\N	STUDENT	12259	11	HS	\N	\N	t
+561	Lynn Htet	Aung	\N	STUDENT	12293	5	ES	\N	\N	t
+562	Phyo Nyein Nyein	Thu	\N	STUDENT	12302	7	MS	\N	\N	t
+563	Ronan	Patel	\N	STUDENT	10119	8	MS	\N	\N	t
+564	Annabel	Asamoah	\N	STUDENT	10746	11	HS	\N	\N	t
+565	Teo	Duwyn	\N	STUDENT	12085	5	ES	\N	\N	t
+566	Mia	Duwyn	\N	STUDENT	12086	9	HS	\N	\N	t
+567	Cato	Van Bommel	\N	STUDENT	12028	11	HS	\N	\N	t
+568	Henrik	Raehalme	\N	STUDENT	12698	1	ES	\N	\N	t
+569	Emilia	Raehalme	\N	STUDENT	12697	5	ES	\N	\N	t
+570	Asara	O'bra	\N	STUDENT	12341	9	HS	\N	\N	t
+571	Seonu	Lee	\N	STUDENT	12449	3	ES	\N	\N	t
+572	Maya	Davis	\N	STUDENT	10953	12	HS	\N	\N	t
+573	Anika	Bruhwiler	\N	STUDENT	12050	12	HS	\N	\N	t
+574	Mila	Jovanovic	\N	STUDENT	12678	5	ES	\N	\N	t
+575	Dunja	Jovanovic	\N	STUDENT	12677	8	MS	\N	\N	t
+576	Elise	Walji	\N	STUDENT	12740	2	ES	\N	\N	t
+577	Felyne	Walji	\N	STUDENT	12739	3	ES	\N	\N	t
+578	Dechen	Jacob	\N	STUDENT	12765	7	MS	\N	\N	t
+579	Tenzin	Jacob	\N	STUDENT	12766	11	HS	\N	\N	t
+580	Fatoumata	Touré	\N	STUDENT	12324	4	ES	\N	\N	t
+581	Ousmane	Touré	\N	STUDENT	12325	5	ES	\N	\N	t
+582	Helena	Khayat De Andrade	\N	STUDENT	12642	PK	ES	\N	\N	t
+583	Sophia	Khayat De Andrade	\N	STUDENT	12650	1	ES	\N	\N	t
+584	Maelle	Nitcheu	\N	STUDENT	12762	PK	ES	\N	\N	t
+585	Margot	Nitcheu	\N	STUDENT	12415	2	ES	\N	\N	t
+586	Marion	Nitcheu	\N	STUDENT	12417	3	ES	\N	\N	t
+587	Eva	Fernstrom	\N	STUDENT	11939	5	ES	\N	\N	t
+588	Sienna	Barragan Sofrony	\N	STUDENT	12831	K	ES	\N	\N	t
+589	Gael	Barragan Sofrony	\N	STUDENT	12711	3	ES	\N	\N	t
+590	William	Jansen	\N	STUDENT	11837	8	MS	\N	\N	t
+591	Matias	Jansen	\N	STUDENT	11855	10	HS	\N	\N	t
+592	Siri	Maagaard	\N	STUDENT	12827	4	ES	\N	\N	t
+593	Laerke	Maagaard	\N	STUDENT	12826	9	HS	\N	\N	t
+594	Chae Hyun	Jin	\N	STUDENT	12647	PK	ES	\N	\N	t
+595	A-Hyun	Jin	\N	STUDENT	12246	2	ES	\N	\N	t
+596	Pietro	Fundaro	\N	STUDENT	11329	10	HS	\N	\N	t
+597	Jade	Onderi	\N	STUDENT	11847	9	HS	\N	\N	t
+598	Nikhil	Kimatrai	\N	STUDENT	11810	9	HS	\N	\N	t
+599	Rhea	Kimatrai	\N	STUDENT	11809	9	HS	\N	\N	t
+600	Kennedy	Ireri	\N	STUDENT	10313	9	HS	\N	\N	t
+603	Kaynan	Abshir	\N	STUDENT	12830	K	ES	\N	\N	t
+604	Farzin	Taneem	\N	STUDENT	11335	7	MS	\N	\N	t
+605	Umaiza	Taneem	\N	STUDENT	11336	8	MS	\N	\N	t
+606	Oagile	Mothobi	\N	STUDENT	12808	1	ES	\N	\N	t
+607	Resegofetse	Mothobi	\N	STUDENT	12807	4	ES	\N	\N	t
+608	Soline	Wittmann	\N	STUDENT	12429	10	HS	\N	\N	t
+609	Mateo	Muziramakenga	\N	STUDENT	12704	1	ES	\N	\N	t
+610	Aiden	Muziramakenga	\N	STUDENT	12703	4	ES	\N	\N	t
+611	Charlie	Carver Wildig	\N	STUDENT	12602	5	ES	\N	\N	t
+612	Barney	Carver Wildig	\N	STUDENT	12601	7	MS	\N	\N	t
+613	Jijoon	Park	\N	STUDENT	12787	2	ES	\N	\N	t
+614	Jooan	Park	\N	STUDENT	12786	4	ES	\N	\N	t
+615	Zohar	Hercberg	\N	STUDENT	12745	PK	ES	\N	\N	t
+616	Amitai	Hercberg	\N	STUDENT	12680	3	ES	\N	\N	t
+617	Uriya	Hercberg	\N	STUDENT	12682	7	MS	\N	\N	t
+618	Rafael	Carter	\N	STUDENT	12776	8	MS	\N	\N	t
+619	Vihaan	Arora	\N	STUDENT	12242	2	ES	\N	\N	t
+620	Sofia	Crandall	\N	STUDENT	12990	12	HS	\N	\N	t
+621	Almaira	Ihsan	\N	STUDENT	13061	5	ES	\N	\N	t
+622	Rayyan	Ihsan	\N	STUDENT	13060	7	MS	\N	\N	t
+623	Zakhrafi	Ihsan	\N	STUDENT	13063	11	HS	\N	\N	t
+624	Alexander	Thomas	\N	STUDENT	12579	11	HS	\N	\N	t
+626	Samuel	Dove	\N	STUDENT	12920	11	HS	\N	\N	t
+627	Alvin	Ngumi	\N	STUDENT	12588	11	HS	\N	\N	t
+628	Julia	Handler	\N	STUDENT	13100	6	MS	\N	\N	t
+629	Josephine	Maguire	\N	STUDENT	12592	8	MS	\N	\N	t
+630	Theodore	Maguire	\N	STUDENT	12593	10	HS	\N	\N	t
+631	Deniza	Kasymbekova Tauras	\N	STUDENT	13027	5	ES	\N	\N	t
+632	Amman	Assefa	\N	STUDENT	12669	8	MS	\N	\N	t
+633	Lucas	Maasdorp Mogollon	\N	STUDENT	12822	1	ES	\N	\N	t
+634	Gabriela	Maasdorp Mogollon	\N	STUDENT	12821	4	ES	\N	\N	t
+635	Dallin	Daines	\N	STUDENT	13064	2	ES	\N	\N	t
+636	Caleb	Daines	\N	STUDENT	13084	4	ES	\N	\N	t
+637	Gabriel	Mccown	\N	STUDENT	12833	K	ES	\N	\N	t
+638	Clea	Mccown	\N	STUDENT	12837	2	ES	\N	\N	t
+639	Beckham	Stock	\N	STUDENT	12916	2	ES	\N	\N	t
+640	Payton	Stock	\N	STUDENT	12914	11	HS	\N	\N	t
+641	Ruhan	Reza	\N	STUDENT	13021	7	MS	\N	\N	t
+642	Nandita	Sankar	\N	STUDENT	12802	3	ES	\N	\N	t
+643	Ian	Kavaleuski	\N	STUDENT	13059	10	HS	\N	\N	t
+644	Kian	Ghelani-Decorte	\N	STUDENT	12673	8	MS	\N	\N	t
+645	Elrad	Abdurazakov	\N	STUDENT	12690	6	MS	\N	\N	t
+646	Malik	Kamara	\N	STUDENT	12724	1	ES	\N	\N	t
+647	Ethan	Diehl	\N	STUDENT	12863	PK	ES	\N	\N	t
+648	Malcolm	Diehl	\N	STUDENT	12864	1	ES	\N	\N	t
+649	Elena	Mosher	\N	STUDENT	12710	1	ES	\N	\N	t
+650	Emma	Mosher	\N	STUDENT	12709	3	ES	\N	\N	t
+651	Abibatou	Magassouba	\N	STUDENT	13092	2	ES	\N	\N	t
+652	Sada	Bomba	\N	STUDENT	12989	11	HS	\N	\N	t
+653	Tamaki	Ishikawa	\N	STUDENT	13054	3	ES	\N	\N	t
+654	Colin	Walls	\N	STUDENT	12475	3	ES	\N	\N	t
+655	Ethan	Walls	\N	STUDENT	12474	5	ES	\N	\N	t
+656	Emilin	Patterson	\N	STUDENT	12811	3	ES	\N	\N	t
+657	Kaitlin	Patterson	\N	STUDENT	12810	7	MS	\N	\N	t
+658	Elsie	Mackay	\N	STUDENT	12886	4	ES	\N	\N	t
+664	Nora	Mackay	\N	STUDENT	12885	6	MS	\N	\N	t
+665	Samantha	Ishee	\N	STUDENT	12832	K	ES	\N	\N	t
+666	Emily	Ishee	\N	STUDENT	12836	5	ES	\N	\N	t
+667	Sonya	Wagner	\N	STUDENT	12892	4	ES	\N	\N	t
+668	Ayaan	Pabani	\N	STUDENT	12256	1	ES	\N	\N	t
+669	Arth	Jain	\N	STUDENT	13088	K	ES	\N	\N	t
+670	Caleb	Fekadeneh	\N	STUDENT	12641	5	ES	\N	\N	t
+671	Sina	Fekadeneh	\N	STUDENT	12633	10	HS	\N	\N	t
+672	Marc-Andri	Bachmann	\N	STUDENT	12604	8	MS	\N	\N	t
+673	Ralia	Daher	\N	STUDENT	13066	PK	ES	\N	\N	t
+674	Abbas	Daher	\N	STUDENT	12435	1	ES	\N	\N	t
+675	Ruth Yifru	Tafesse	\N	STUDENT	13099	11	HS	\N	\N	t
+676	Emil	Grundberg	\N	STUDENT	13019	8	MS	\N	\N	t
+677	Amen	Mezemir	\N	STUDENT	10498	8	MS	\N	\N	t
+678	Zizwani	Chikapa	\N	STUDENT	13101	PK	ES	\N	\N	t
+679	Chawanangwa	Mkandawire	\N	STUDENT	12292	7	MS	\N	\N	t
+680	Daniel	Mkandawire	\N	STUDENT	12272	11	HS	\N	\N	t
+681	Selkie	Douglas-Hamilton Pope	\N	STUDENT	12995	9	HS	\N	\N	t
+682	Yoav	Margovsky-Lotem	\N	STUDENT	12649	PK	ES	\N	\N	t
+683	Liam	Irungu	\N	STUDENT	13039	K	ES	\N	\N	t
+684	Aiden	Irungu	\N	STUDENT	13038	2	ES	\N	\N	t
+685	Feng Zimo	Li	\N	STUDENT	13024	5	ES	\N	\N	t
+686	Feng Milun	Li	\N	STUDENT	13023	7	MS	\N	\N	t
+687	Alice	Grindell	\N	STUDENT	12900	K	ES	\N	\N	t
+688	Emily	Grindell	\N	STUDENT	12061	2	ES	\N	\N	t
+689	Emilie	Abbonizio	\N	STUDENT	13016	11	HS	\N	\N	t
+690	Cassidy	Muttersbaugh	\N	STUDENT	13035	K	ES	\N	\N	t
+691	Magnolia	Muttersbaugh	\N	STUDENT	13034	3	ES	\N	\N	t
+692	Mathis	Bellamy	\N	STUDENT	12823	K	ES	\N	\N	t
+693	Maisha	Donne	\N	STUDENT	12590	11	HS	\N	\N	t
+694	Amanda	Romero Sánchez-Miranda	\N	STUDENT	12800	3	ES	\N	\N	t
+695	Candela	Romero	\N	STUDENT	12799	8	MS	\N	\N	t
+696	Nadia	Nora	\N	STUDENT	12860	11	HS	\N	\N	t
+697	Nayoon	Lee	\N	STUDENT	12626	5	ES	\N	\N	t
+698	Gaspard	Womble	\N	STUDENT	12718	1	ES	\N	\N	t
+699	Nile	Sudra	\N	STUDENT	13065	PK	ES	\N	\N	t
+700	Xinyi	Huang	\N	STUDENT	13074	1	ES	\N	\N	t
+701	Aabhar	Baral	\N	STUDENT	13030	5	ES	\N	\N	t
+702	Azza	Rollins	\N	STUDENT	12982	9	HS	\N	\N	t
+703	Bushra	Hussain	\N	STUDENT	13070	PK	ES	\N	\N	t
+704	Monika	Srutova	\N	STUDENT	12999	8	MS	\N	\N	t
+705	Nyx Verena	Houndeganme	\N	STUDENT	12815	6	MS	\N	\N	t
+706	Michael	Houndeganme	\N	STUDENT	12814	9	HS	\N	\N	t
+707	Crédo Terrence	Houndeganme	\N	STUDENT	12813	12	HS	\N	\N	t
+708	Zefyros	Patrikios	\N	STUDENT	13103	PK	ES	\N	\N	t
+709	Emilio	Trujillo	\N	STUDENT	13067	PK	ES	\N	\N	t
+710	Eitan	Segev	\N	STUDENT	12862	PK	ES	\N	\N	t
+711	Amitai	Segev	\N	STUDENT	12721	1	ES	\N	\N	t
+712	Karina	Maini	\N	STUDENT	12986	10	HS	\N	\N	t
+713	Elena	Moons	\N	STUDENT	12851	7	MS	\N	\N	t
+714	Aymen	Zeynu	\N	STUDENT	12809	3	ES	\N	\N	t
+715	Abem	Zeynu	\N	STUDENT	12552	7	MS	\N	\N	t
+716	Alan	Simek	\N	STUDENT	13015	8	MS	\N	\N	t
+717	Emil	Simek	\N	STUDENT	13014	11	HS	\N	\N	t
+718	Hachim	Gallagher	\N	STUDENT	13083	2	ES	\N	\N	t
+719	Kabir	Jaffer	\N	STUDENT	12646	K	ES	\N	\N	t
+720	Ayaan	Jaffer	\N	STUDENT	11646	4	ES	\N	\N	t
+721	Alifiya	Dawoodbhai	\N	STUDENT	12580	12	HS	\N	\N	t
+722	Ruth	Lindkvist	\N	STUDENT	12578	9	HS	\N	\N	t
+723	Adrian	Otieno	\N	STUDENT	12884	7	MS	\N	\N	t
+724	Aanya	Shah	\N	STUDENT	12583	8	MS	\N	\N	t
+20	Vera	Ashton	\N	STUDENT	11896	11	HS	\N	\N	t
+726	Nora	Schei	\N	STUDENT	12582	8	MS	\N	\N	t
+727	Jake	Schoneveld	\N	STUDENT	13086	PK	ES	\N	\N	t
+728	Roy	Gitiba	\N	STUDENT	12818	7	MS	\N	\N	t
+729	Kirk Wise	Gitiba	\N	STUDENT	12817	9	HS	\N	\N	t
+730	Isaiah	Geller	\N	STUDENT	12539	9	HS	\N	\N	t
+731	Bianca	Mbera	\N	STUDENT	12603	10	HS	\N	\N	t
+732	Kors	Ukumu	\N	STUDENT	12545	9	HS	\N	\N	t
+733	Jiya	Shah	\N	STUDENT	12857	8	MS	\N	\N	t
+734	Zayan	Karmali	\N	STUDENT	13098	10	HS	\N	\N	t
+735	Serenae	Angima	\N	STUDENT	12954	8	MS	\N	\N	t
+736	Fatoumatta	Fatty	\N	STUDENT	12735	12	HS	\N	\N	t
+737	Saone	Kwena	\N	STUDENT	12985	10	HS	\N	\N	t
+738	Howard	Wesley Iii	\N	STUDENT	12861	PK	ES	\N	\N	t
+739	Isabella	Mason	\N	STUDENT	12629	11	HS	\N	\N	t
+740	Ayana	Limpered	\N	STUDENT	13085	PK	ES	\N	\N	t
+741	Arielle	Limpered	\N	STUDENT	12795	2	ES	\N	\N	t
+742	Rakeb	Teklemichael	\N	STUDENT	12412	10	HS	\N	\N	t
+743	Pranai	Shah	\N	STUDENT	12987	11	HS	\N	\N	t
+744	Dhiya	Shah	\N	STUDENT	12541	7	MS	\N	\N	t
+745	Marianne	Roquebrune	\N	STUDENT	12644	PK	ES	\N	\N	t
+746	Nichelle	Somaia	\N	STUDENT	12842	1	ES	\N	\N	t
+747	Shivail	Somaia	\N	STUDENT	11769	4	ES	\N	\N	t
+748	Lukas	Stiles	\N	STUDENT	13068	PK	ES	\N	\N	t
+749	Nikolas	Stiles	\N	STUDENT	11137	5	ES	\N	\N	t
+750	Nathan	Matimu	\N	STUDENT	12979	9	HS	\N	\N	t
+751	Aristophanes	Abreu	\N	STUDENT	12895	K	ES	\N	\N	t
+752	Herson Alexandros	Abreu	\N	STUDENT	12896	1	ES	\N	\N	t
+753	Arthur	Bailey	\N	STUDENT	12825	9	HS	\N	\N	t
+754	Florrie	Bailey	\N	STUDENT	12812	11	HS	\N	\N	t
+755	Adam	Kone	\N	STUDENT	11368	10	HS	\N	\N	t
+756	Zahra	Kone	\N	STUDENT	11367	12	HS	\N	\N	t
+757	Thomas	Wimber	\N	STUDENT	12670	8	MS	\N	\N	t
+758	Rahmaan	Ali	\N	STUDENT	12755	12	HS	\N	\N	t
+759	Davran	Chowdhury	\N	STUDENT	13029	5	ES	\N	\N	t
+760	Nevzad	Chowdhury	\N	STUDENT	12868	11	HS	\N	\N	t
+761	Aariyana	Patel	\N	STUDENT	12553	9	HS	\N	\N	t
+762	Graham	Mueller	\N	STUDENT	12938	7	MS	\N	\N	t
+763	Willem	Mueller	\N	STUDENT	12937	9	HS	\N	\N	t
+764	Christian	Mueller	\N	STUDENT	12936	11	HS	\N	\N	t
+765	Libasse	Ndoye	\N	STUDENT	13075	8	MS	\N	\N	t
+766	Yi (Gavin)	Wang	\N	STUDENT	13020	3	ES	\N	\N	t
+767	Shuyi (Bella)	Wang	\N	STUDENT	12950	8	MS	\N	\N	t
+776	Taim	Hussain	\N	STUDENT	12899	K	ES	\N	\N	t
+777	Kaveer Singh	Hayer	\N	STUDENT	13048	2	ES	\N	\N	t
+778	Manvir Singh	Hayer	\N	STUDENT	12471	7	MS	\N	\N	t
+779	Ahmed Jabir	Bin Taif	\N	STUDENT	12898	K	ES	\N	\N	t
+780	Ahmed Jayed	Bin Taif	\N	STUDENT	12311	2	ES	\N	\N	t
+781	Ahmed Jawad	Bin Taif	\N	STUDENT	12312	5	ES	\N	\N	t
+782	Rebekah Ysabelle	Nas	\N	STUDENT	12978	9	HS	\N	\N	t
+783	Emilia	Husemann	\N	STUDENT	12949	8	MS	\N	\N	t
+784	Luna	Bonde-Nielsen	\N	STUDENT	12891	4	ES	\N	\N	t
+785	Naomi	Alemayehu	\N	STUDENT	13000	4	ES	\N	\N	t
+786	Arabella	Hales	\N	STUDENT	13105	PK	ES	\N	\N	t
+789	Zari	Khan	\N	STUDENT	13087	9	HS	\N	\N	t
+790	Cradle Terry	Alwedo	\N	STUDENT	13026	5	ES	\N	\N	t
+791	Felix	Braun	\N	STUDENT	13095	8	MS	\N	\N	t
+792	Io	Verstraete	\N	STUDENT	12998	10	HS	\N	\N	t
+793	Matthew	Crabtree	\N	STUDENT	12560	11	HS	\N	\N	t
+794	Kieu	Sansculotte	\N	STUDENT	12269	12	HS	\N	\N	t
+795	Daniel	Berkouwer	\N	STUDENT	12496	1	ES	\N	\N	t
+796	Kayla	Opere	\N	STUDENT	12820	PK	ES	\N	\N	t
+797	Léa	Berthellier-Antoine	\N	STUDENT	12794	1	ES	\N	\N	t
+798	Lukas	Kaseva	\N	STUDENT	13104	PK	ES	\N	\N	t
+799	Lauri	Kaseva	\N	STUDENT	13096	3	ES	\N	\N	t
+800	Layal	Khan	\N	STUDENT	12550	2	ES	\N	\N	t
+801	Ishbel	Croze	\N	STUDENT	13062	9	HS	\N	\N	t
+802	Emily	Croucher	\N	STUDENT	12873	5	ES	\N	\N	t
+803	Oliver	Croucher	\N	STUDENT	12874	7	MS	\N	\N	t
+804	Anabelle	Croucher	\N	STUDENT	12875	9	HS	\N	\N	t
+805	Vera	Olvik	\N	STUDENT	12953	8	MS	\N	\N	t
+806	Theodor	Skaaraas-Gjoelberg	\N	STUDENT	12845	1	ES	\N	\N	t
+807	Cedrik	Skaaraas-Gjoelberg	\N	STUDENT	12846	5	ES	\N	\N	t
+808	David	Lee	\N	STUDENT	13089	2	ES	\N	\N	t
+809	Sanaya	Jijina	\N	STUDENT	12736	12	HS	\N	\N	t
+810	Harshaan	Arora	\N	STUDENT	13010	8	MS	\N	\N	t
+811	Tisya	Arora	\N	STUDENT	13009	10	HS	\N	\N	t
+812	Gai	Elkana	\N	STUDENT	13001	1	ES	\N	\N	t
+813	Yuval	Elkana	\N	STUDENT	13002	3	ES	\N	\N	t
+814	Matan	Elkana	\N	STUDENT	13003	5	ES	\N	\N	t
+815	Niccolo	Nasidze	\N	STUDENT	12901	K	ES	\N	\N	t
+816	Jayesh	Aditya	\N	STUDENT	12472	8	MS	\N	\N	t
+817	Zara	Bredin	\N	STUDENT	11851	10	HS	\N	\N	t
+818	Mark	Lavack	\N	STUDENT	20817	8	MS	\N	\N	t
+819	Michael	Lavack	\N	STUDENT	26015	10	HS	\N	\N	t
+820	Rohin	Dodhia	\N	STUDENT	10820	11	HS	\N	\N	t
+821	Jaidyn	Bunch	\N	STUDENT	12508	11	HS	\N	\N	t
+822	Chalita	Victor	\N	STUDENT	12529	11	HS	\N	\N	t
+823	Hannah	Waalewijn	\N	STUDENT	12598	7	MS	\N	\N	t
+824	Simon	Waalewijn	\N	STUDENT	12596	11	HS	\N	\N	t
+825	Kaitlin	Wietecha	\N	STUDENT	12591	10	HS	\N	\N	t
+826	Saoirse	Molloy	\N	STUDENT	12702	2	ES	\N	\N	t
+827	Caelan	Molloy	\N	STUDENT	12701	4	ES	\N	\N	t
+828	Victor	Mollier-Camus	\N	STUDENT	12594	5	ES	\N	\N	t
+829	Elisa	Mollier-Camus	\N	STUDENT	12586	8	MS	\N	\N	t
+830	Jaishna	Varun	\N	STUDENT	12684	7	MS	\N	\N	t
+21	Nathan	Massawe	\N	STUDENT	11932	4	ES	\N	\N	t
+22	Noah	Massawe	\N	STUDENT	11933	8	MS	\N	\N	t
+23	Ziv	Bedein	\N	STUDENT	12746	K	ES	\N	\N	t
+24	Itai	Bedein	\N	STUDENT	12615	4	ES	\N	\N	t
+25	Annika	Purdy	\N	STUDENT	12345	2	ES	\N	\N	t
+26	Christiaan	Purdy	\N	STUDENT	12348	5	ES	\N	\N	t
+27	Gunnar	Purdy	\N	STUDENT	12349	8	MS	\N	\N	t
+28	Lana	Abou Hamda	\N	STUDENT	12780	5	ES	\N	\N	t
+29	Samer	Abou Hamda	\N	STUDENT	12779	8	MS	\N	\N	t
+30	Youssef	Abou Hamda	\N	STUDENT	12778	11	HS	\N	\N	t
+31	Ida-Marie	Andersen	\N	STUDENT	12075	12	HS	\N	\N	t
+831	Leah	Heijstee	\N	STUDENT	12782	3	ES	\N	\N	t
+832	Zara	Heijstee	\N	STUDENT	12781	8	MS	\N	\N	t
+833	Graciela	Sotiriou	\N	STUDENT	12902	K	ES	\N	\N	t
+834	Leonidas	Sotiriou	\N	STUDENT	12239	2	ES	\N	\N	t
+835	Evangelina	Barbacci	\N	STUDENT	12612	7	MS	\N	\N	t
+836	Gabriella	Barbacci	\N	STUDENT	12611	10	HS	\N	\N	t
+837	Santiago	Moyle	\N	STUDENT	12581	9	HS	\N	\N	t
+838	Alissa	Yakusik	\N	STUDENT	13082	4	ES	\N	\N	t
+839	Farah	Ghariani	\N	STUDENT	12662	9	HS	\N	\N	t
+840	Lillian	Cameron-Mutyaba	\N	STUDENT	12634	10	HS	\N	\N	t
+841	Rose	Cameron-Mutyaba	\N	STUDENT	12635	10	HS	\N	\N	t
+842	Nathan	Teferi	\N	STUDENT	12984	10	HS	\N	\N	t
+843	Angab	Mayar	\N	STUDENT	13057	11	HS	\N	\N	t
+844	Hanina	Abdosh	\N	STUDENT	12737	12	HS	\N	\N	t
+849	Liri	Alemu	\N	STUDENT	12732	3	ES	\N	\N	t
+850	Ishanvi	Ishanvi	\N	STUDENT	13053	K	ES	\N	\N	t
+878	Alexandre	Patenaude	\N	STUDENT	12743	K	ES	\N	\N	t
+879	Ren	Hirose	\N	STUDENT	13040	1	ES	\N	\N	t
+880	Abel	Johnson	\N	STUDENT	12767	1	ES	\N	\N	t
+881	Issa	Kane	\N	STUDENT	13037	1	ES	\N	\N	t
+882	Beatrix	Kiers	\N	STUDENT	12717	1	ES	\N	\N	t
+883	Yousif	Menkerios	\N	STUDENT	12459	1	ES	\N	\N	t
+884	Clayton	Oberjuerge	\N	STUDENT	12687	1	ES	\N	\N	t
+885	Yash	Pant	\N	STUDENT	12480	1	ES	\N	\N	t
+886	Amandla	Pijovic	\N	STUDENT	13090	1	ES	\N	\N	t
+887	Paola	Santos	\N	STUDENT	13094	1	ES	\N	\N	t
+888	Amaya	Sarfaraz	\N	STUDENT	12608	1	ES	\N	\N	t
+889	Clarice	Schrader	\N	STUDENT	12841	1	ES	\N	\N	t
+911	Uzima	Otieno	uotieno29@isk.ac.ke	STUDENT	13056	7	MS	\N	uotieno29	t
+924	Spencer	Schenck	sschenck30@isk.ac.ke	STUDENT	11457	6	MS	\N	sschenck30	t
+925	Isla	Willis	iwillis30@isk.ac.ke	STUDENT	12969	6	MS	\N	iwillis30	t
+926	Seya	Chandaria	schandaria30@isk.ac.ke	STUDENT	10775	6	MS	\N	schandaria30	t
+927	Malan	Chopra	mchopra30@isk.ac.ke	STUDENT	10508	6	MS	\N	mchopra30	t
+928	Lilla	Vestergaard	svestergaard30@isk.ac.ke	STUDENT	11266	6	MS	\N	svestergaard30	t
+890	Mandisa	Sobantu	\N	STUDENT	12939	1	ES	\N	\N	t
+891	Tasheni	Kamenga	\N	STUDENT	12877	2	ES	\N	\N	t
+892	Theodore	Patenaude	\N	STUDENT	12713	2	ES	\N	\N	t
+893	Ewyn	Soobrattee	\N	STUDENT	12714	2	ES	\N	\N	t
+894	Anna	Von Platen-Hallermund	\N	STUDENT	12888	2	ES	\N	\N	t
+895	Tristan	Wendelboe	\N	STUDENT	12527	2	ES	\N	\N	t
+896	Signe	Andersen	\N	STUDENT	12570	3	ES	\N	\N	t
+897	Holly	Asquith	\N	STUDENT	12944	3	ES	\N	\N	t
+898	Aurélien	Diop Weyer	\N	STUDENT	13033	3	ES	\N	\N	t
+899	Levi	Lundell	\N	STUDENT	12693	3	ES	\N	\N	t
+900	Santiago	Santos	\N	STUDENT	13093	3	ES	\N	\N	t
+901	Genevieve	Schrader	\N	STUDENT	12840	3	ES	\N	\N	t
+902	Martin	Vazquez Eraso	\N	STUDENT	12369	3	ES	\N	\N	t
+903	Magne	Vestergaard	\N	STUDENT	12664	3	ES	\N	\N	t
+904	Nanna	Vestergaard	\N	STUDENT	12665	3	ES	\N	\N	t
+905	Benjamin	Weill	\N	STUDENT	12849	3	ES	\N	\N	t
+906	Kira	Bailey	\N	STUDENT	12289	4	ES	\N	\N	t
+907	Aaryama	Bixby	\N	STUDENT	12850	4	ES	\N	\N	t
+908	Armelle	Carlevato	\N	STUDENT	12925	4	ES	\N	\N	t
+909	Sonia	Corbin	\N	STUDENT	12942	4	ES	\N	\N	t
+910	Zaria	Khalid	\N	STUDENT	12617	4	ES	\N	\N	t
+912	Carlos Laith	Farraj	\N	STUDENT	12607	4	ES	\N	\N	t
+913	Jarius	Farraj	\N	STUDENT	12606	11	HS	\N	\N	t
+914	Murad	Dadashev	\N	STUDENT	12768	8	MS	\N	\N	t
+915	Zubeyda	Dadasheva	\N	STUDENT	12769	12	HS	\N	\N	t
+916	Sumaiya	Iversen	\N	STUDENT	12433	12	HS	\N	\N	t
+917	Nike	Borg Aidnell	\N	STUDENT	12542	2	ES	\N	\N	t
+918	Siv	Borg Aidnell	\N	STUDENT	12543	2	ES	\N	\N	t
+919	Disa	Borg Aidnell	\N	STUDENT	12696	5	ES	\N	\N	t
+920	Ryan	Ellis	\N	STUDENT	12070	11	HS	\N	\N	t
+921	Adrienne	Ellis	\N	STUDENT	12068	12	HS	\N	\N	t
+922	Emalea	Hodge	\N	STUDENT	12192	5	ES	\N	\N	t
+923	Jip	Arens	\N	STUDENT	12430	12	HS	\N	\N	t
+2	Rosa Marie	Rosen	\N	STUDENT	11764	3	ES	\N	\N	t
+3	August	Rosen	\N	STUDENT	11845	9	HS	\N	\N	t
+4	Dawit	Abdissa	\N	STUDENT	13077	8	MS	\N	\N	t
+5	Meron	Abdissa	\N	STUDENT	13078	8	MS	\N	\N	t
+6	Yohanna Wondim Belachew	Andersen	\N	STUDENT	12966	1	ES	\N	\N	t
+7	Yonas Wondim Belachew	Andersen	\N	STUDENT	12968	10	HS	\N	\N	t
+768	Mariam	David-Tafida	\N	STUDENT	12715	2	ES	\N	\N	t
+769	James	Farrell	\N	STUDENT	12720	1	ES	\N	\N	t
+770	Anna Toft	Gronborg	\N	STUDENT	12801	K	ES	\N	\N	t
+771	Rocco	Sidari	\N	STUDENT	13036	2	ES	\N	\N	t
+772	David	Ajidahun	\N	STUDENT	13072	PK	ES	\N	\N	t
+773	Darian	Ajidahun	\N	STUDENT	12805	2	ES	\N	\N	t
+774	Annabelle	Ajidahun	\N	STUDENT	12804	4	ES	\N	\N	t
+775	Saif	Hussain	\N	STUDENT	12328	4	ES	\N	\N	t
+10	Kennedy	Armstrong	\N	STUDENT	12276	11	HS	\N	\N	t
+11	Lily	De Backer	\N	STUDENT	11856	10	HS	\N	\N	t
+12	Emma	Kuehnle	\N	STUDENT	11801	5	ES	\N	\N	t
+13	John (Trey)	Kuehnle	\N	STUDENT	11833	7	MS	\N	\N	t
+14	Rahsi	Abraha	\N	STUDENT	12465	4	ES	\N	\N	t
+15	Siyam	Abraha	\N	STUDENT	12464	8	MS	\N	\N	t
+16	Risty	Abraha	\N	STUDENT	12463	9	HS	\N	\N	t
+17	Seret	Abraha	\N	STUDENT	12462	12	HS	\N	\N	t
+996	Elijah	Lundell	\N	STUDENT	12692	5	ES	\N	\N	t
+851	Seher	Goyal	\N	STUDENT	12373	10	HS	\N	\N	t
+852	Michael Omar	Assi	\N	STUDENT	12917	7	MS	\N	\N	t
+853	Abhimanyu	Singh	\N	STUDENT	12728	2	ES	\N	\N	t
+854	Sifa	Otieno	\N	STUDENT	13013	12	HS	\N	\N	t
+855	Iman	Ibrahim	\N	STUDENT	12819	9	HS	\N	\N	t
+856	Tarquin	Mathews	\N	STUDENT	12994	11	HS	\N	\N	t
+857	Jia	Pandit	\N	STUDENT	10437	10	HS	\N	\N	t
+858	Josephine	Waugh	\N	STUDENT	12844	1	ES	\N	\N	t
+859	Rosemary	Waugh	\N	STUDENT	12843	4	ES	\N	\N	t
+860	Daudi	Kisukye	\N	STUDENT	13025	5	ES	\N	\N	t
+861	Gabriel	Kisukye	\N	STUDENT	12759	10	HS	\N	\N	t
+862	Aydin	Virani	\N	STUDENT	12483	3	ES	\N	\N	t
+863	Yasmin	Huysdens	\N	STUDENT	12927	7	MS	\N	\N	t
+864	Jacey	Huysdens	\N	STUDENT	12926	9	HS	\N	\N	t
+865	Esther	Schonemann	\N	STUDENT	13028	5	ES	\N	\N	t
+866	Nabou	Khouma	\N	STUDENT	13046	K	ES	\N	\N	t
+867	Khady	Khouma	\N	STUDENT	13045	3	ES	\N	\N	t
+868	Emily	Ellinger	\N	STUDENT	13102	5	ES	\N	\N	t
+869	Isaac	D'souza	\N	STUDENT	12501	8	MS	\N	\N	t
+870	Ezra	Kane	\N	STUDENT	13071	PK	ES	\N	\N	t
+871	Sapia	Pijovic	\N	STUDENT	13091	PK	ES	\N	\N	t
+872	Mubanga	Birschbach	\N	STUDENT	13052	K	ES	\N	\N	t
+873	Ben	Granot	\N	STUDENT	12748	K	ES	\N	\N	t
+874	Zyla	Khalid	\N	STUDENT	12747	K	ES	\N	\N	t
+875	Hannah	Kishiue-Turkstra	\N	STUDENT	12751	K	ES	\N	\N	t
+876	Alexander	Magnusson	\N	STUDENT	12824	K	ES	\N	\N	t
+877	Emerson	Nau	\N	STUDENT	12834	K	ES	\N	\N	t
+993	Alayna	Fritts	\N	STUDENT	12935	5	ES	\N	\N	t
+8	Cassandre	Camisa	\N	STUDENT	11881	9	HS	\N	\N	t
+9	Cole	Armstrong	\N	STUDENT	12277	7	MS	\N	\N	t
+997	Johannah	Mpatswe	\N	STUDENT	12700	5	ES	\N	\N	t
+998	Bella	Bergqvist	\N	STUDENT	12913	6	MS	\N	\N	t
+999	Bertram	Birk	\N	STUDENT	12699	6	MS	\N	\N	t
+1000	Elijah	Carey	\N	STUDENT	12923	6	MS	\N	\N	t
+1001	Eva	Ryan	\N	STUDENT	12618	6	MS	\N	\N	t
+1002	Mitchell	Bagenda	\N	STUDENT	12146	7	MS	\N	\N	t
+1003	Luka	Breda	\N	STUDENT	12183	7	MS	\N	\N	t
+1004	Paco	Breda	\N	STUDENT	12184	7	MS	\N	\N	t
+1005	Camille	Corbin	\N	STUDENT	12941	7	MS	\N	\N	t
+1006	Colin	Eldridge	\N	STUDENT	12974	7	MS	\N	\N	t
+1007	Maya	Ferede	\N	STUDENT	11726	7	MS	\N	\N	t
+1008	Ava	Fritts	\N	STUDENT	12928	7	MS	\N	\N	t
+1009	Mahiro	Kishiue	\N	STUDENT	12679	7	MS	\N	\N	t
+1010	Lola	Lemley	\N	STUDENT	12870	7	MS	\N	\N	t
+1011	Wesley	Oberjuerge	\N	STUDENT	12685	7	MS	\N	\N	t
+1012	Nicholas	Sobantu	\N	STUDENT	12940	7	MS	\N	\N	t
+1013	Elliot	Asquith	\N	STUDENT	12943	8	MS	\N	\N	t
+1014	Anshika	Basnet	\N	STUDENT	12450	8	MS	\N	\N	t
+1015	Fanny	Bergqvist	\N	STUDENT	12912	8	MS	\N	\N	t
+1016	Norah (Rebel)	Cizek	\N	STUDENT	12666	8	MS	\N	\N	t
+1017	Alexa	Janisse	\N	STUDENT	12675	8	MS	\N	\N	t
+1018	Tiago	Mendonca-Gray	\N	STUDENT	12948	8	MS	\N	\N	t
+1019	Alexa	Spitler	\N	STUDENT	12595	8	MS	\N	\N	t
+1020	Maia	Sykes	\N	STUDENT	12952	8	MS	\N	\N	t
+1021	Sonia	Weill	\N	STUDENT	12848	8	MS	\N	\N	t
+1022	Sienna	Zulberti	\N	STUDENT	12672	8	MS	\N	\N	t
+1023	Maya	Bagenda	\N	STUDENT	12147	9	HS	\N	\N	t
+1024	Muhammad Uneeb	Bakhshi	\N	STUDENT	12760	9	HS	\N	\N	t
+1025	Natasha	Birschbach	\N	STUDENT	13058	9	HS	\N	\N	t
+1026	Lara	Blanc Yeo	\N	STUDENT	12858	9	HS	\N	\N	t
+1027	Jai	Cherickel	\N	STUDENT	13006	9	HS	\N	\N	t
+1028	Samarth	Dalal	\N	STUDENT	12859	9	HS	\N	\N	t
+1029	Dan	Ephrem Yohannes	\N	STUDENT	11772	9	HS	\N	\N	t
+1030	Rowan	Hobbs	\N	STUDENT	12972	9	HS	\N	\N	t
+1031	Benjamin	Johansson-Desai	\N	STUDENT	13012	9	HS	\N	\N	t
+1032	Vashnie	Joymungul	\N	STUDENT	12996	9	HS	\N	\N	t
+1033	Sphesihle	Kamenga	\N	STUDENT	12876	9	HS	\N	\N	t
+1034	Seung Yoon	Nam	\N	STUDENT	13079	9	HS	\N	\N	t
+1035	Ishita	Rathore	\N	STUDENT	12983	9	HS	\N	\N	t
+1036	Nicholas	Rex	\N	STUDENT	10884	9	HS	\N	\N	t
+1037	Asbjørn	Vestergaard	\N	STUDENT	12663	9	HS	\N	\N	t
+1038	Filip	Adamec	\N	STUDENT	12904	10	HS	\N	\N	t
+1039	Solveig	Andersen	\N	STUDENT	12569	10	HS	\N	\N	t
+1040	Eugène	Astier	\N	STUDENT	12790	10	HS	\N	\N	t
+1041	Elsa	Bergqvist	\N	STUDENT	12911	10	HS	\N	\N	t
+1042	Maximilian	Chappell	\N	STUDENT	12576	10	HS	\N	\N	t
+1043	Charlotte	De Geer-Howard	\N	STUDENT	12653	10	HS	\N	\N	t
+1044	Aarish	Islam	\N	STUDENT	13008	10	HS	\N	\N	t
+1045	Daniel	Johansson-Desai	\N	STUDENT	13011	10	HS	\N	\N	t
+1046	Dario	Lawrence	\N	STUDENT	11438	10	HS	\N	\N	t
+1047	Maximo	Lemley	\N	STUDENT	12869	10	HS	\N	\N	t
+1048	Lila	Roquitte	\N	STUDENT	12555	10	HS	\N	\N	t
+1049	Mathilde	Scanlon	\N	STUDENT	12558	10	HS	\N	\N	t
+1050	Chisanga	Birschbach	\N	STUDENT	13055	11	HS	\N	\N	t
+1051	Wade	Eldridge	\N	STUDENT	12975	11	HS	\N	\N	t
+1052	Reem	Ephrem Yohannes	\N	STUDENT	11748	11	HS	\N	\N	t
+1053	Liam	Hobbs	\N	STUDENT	12971	11	HS	\N	\N	t
+1054	Daniel	Kadilli	\N	STUDENT	12991	11	HS	\N	\N	t
+1055	Jay Austin	Nimubona	\N	STUDENT	12749	11	HS	\N	\N	t
+1056	Anna Sophia	Stabrawa	\N	STUDENT	25052	11	HS	\N	\N	t
+1057	Elliot	Sykes	\N	STUDENT	12951	11	HS	\N	\N	t
+1058	Lalia	Sylla	\N	STUDENT	12628	11	HS	\N	\N	t
+1059	Camila	Valdivieso Santos	\N	STUDENT	12568	11	HS	\N	\N	t
+1060	Emma	Wright	\N	STUDENT	12567	11	HS	\N	\N	t
+1061	Dzidzor	Ata	\N	STUDENT	12651	12	HS	\N	\N	t
+1062	Nandini	Bhandari	\N	STUDENT	12738	12	HS	\N	\N	t
+1063	Isabella	De Geer-Howard	\N	STUDENT	12652	12	HS	\N	\N	t
+1064	Hanan	Khan	\N	STUDENT	10464	12	HS	\N	\N	t
+1065	Vincenzo	Lawrence	\N	STUDENT	11447	12	HS	\N	\N	t
+1066	Noah	Lutz	\N	STUDENT	24008	12	HS	\N	\N	t
+1067	Julian	Rex	\N	STUDENT	10922	12	HS	\N	\N	t
+1068	Luca	Scanlon	\N	STUDENT	12557	12	HS	\N	\N	t
+1069	Noah	Trenkle	\N	STUDENT	12556	12	HS	\N	\N	t
+1070	Theodore	Wright	twright28@isk.ac.ke	STUDENT	12566	8	MS	\N	twright28	t
+971	Sultan	Buksh	\N	STUDENT	11996	8	MS	\N	\N	t
+972	Olivia	Moons	\N	STUDENT	12852	4	ES	\N	\N	t
+985	Safiya	Menkerios	\N	STUDENT	11954	4	ES	\N	\N	t
+986	Tamas	Meyers	\N	STUDENT	12622	4	ES	\N	\N	t
+987	Arianna	Mucci	\N	STUDENT	12695	4	ES	\N	\N	t
+988	Graham	Oberjuerge	\N	STUDENT	12686	4	ES	\N	\N	t
+1072	DUMMY 1	STUDENT	\N	STUDENT	\N	\N	MS	\N	\N	t
+1074	DUMMY 1	STUDENT	\N	STUDENT	\N	\N	MS	\N	\N	t
+952	Yonatan Wondim Belachew	Andersen	ywondimandersen30@isk.ac.ke	STUDENT	12967	6	MS	\N	ywondimandersen30	t
+953	Yoonseo	Choi	ychoi30@isk.ac.ke	STUDENT	10708	6	MS	\N	ychoi30	t
+954	Evan	Daines	edaines30@isk.ac.ke>	STUDENT	13073	6	MS	\N	edaines30	t
+955	Holly	Mcmurtry	hmcmurtry30@isk.ac.ke	STUDENT	10817	6	MS	\N	hmcmurtry30	t
+956	Max	Stock	mstock30@isk.ac.ke	STUDENT	12915	6	MS	\N	mstock30	t
+957	Rowan	O'neill Calver	roneillcalver30@isk.ac.ke	STUDENT	11458	6	MS	\N	roneillcalver30	t
+958	Selma	Mensah	smensah30@isk.ac.ke	STUDENT	12392	6	MS	\N	smensah30	t
+959	Ainsley	Hire	ahire29@isk.ac.ke	STUDENT	10621	7	MS	\N	ahire29	t
+960	Aisha	Awori	aawori28@isk.ac.ke	STUDENT	10474	8	MS	\N	aawori28	t
+961	Caleb	Ross	cross28@isk.ac.ke	STUDENT	11677	8	MS	\N	cross28	t
+962	Ean	Kimuli	ekimuli29@isk.ac.ke	STUDENT	11703	7	MS	\N	ekimuli29	t
+963	Emiliana	Jensen	ejensen28@isk.ac.ke	STUDENT	11904	8	MS	\N	ejensen28	t
+964	Giancarlo	Biafore	gbiafore28@isk.ac.ke	STUDENT	12171	8	MS	\N	gbiafore28	t
+973	Seung Hyun	Nam	shyun-nam30@isk.ac.ke	STUDENT	13080	6	MS	\N	shyun-nam30	t
+974	Tanay	Cherickel	tcherickel30@isk.ac.ke	STUDENT	13007	6	MS	\N	tcherickel30	t
+975	Zayn	Khalid	zkhalid30@isk.ac.ke	STUDENT	12616	6	MS	\N	zkhalid30	t
+976	Balazs	Meyers	bmeyers30@isk.ac.ke	STUDENT	12621	6	MS	\N	bmeyers30	t
+977	Mahdiyah	Muneeb	mmuneeb30@isk.ac.ke	STUDENT	12761	6	MS	\N	mmuneeb30	t
+978	Mapalo	Birschbach	mbirschbach30@isk.ac.ke	STUDENT	13050	6	MS	\N	mbirschbach30	t
+979	Anastasia	Mulema	amulema30@isk.ac.ke	STUDENT	11622	6	MS	\N	amulema30	t
+980	Etienne	Carlevato	ecarlevato29@isk.ac.ke	STUDENT	12924	7	MS	\N	ecarlevato29	t
+981	Lauren	Mucci	lmucci30@isk.ac.ke	STUDENT	12694	6	MS	\N	lmucci30	t
+982	Seth	Lundell	slundell30@isk.ac.ke	STUDENT	12691	6	MS	\N	slundell30	t
+983	Evyn	Hobbs	ehobbs30@isk.ac.ke	STUDENT	12973	6	MS	\N	ehobbs30	t
+984	Nirvi	Joymungul	njoymungul29@isk.ac.ke	STUDENT	12997	7	MS	\N	njoymungul29	t
+1080	Rachel	Aondo	raondo@isk.ac.ke	MUSIC TEACHER	\N	\N	ES	LOWER ES MUSIC	raondo	t
+1079	Laois	Rogers	lrogers@isk.ac.ke	MUSIC TEACHER	\N	\N	ES	UPPER ES MUSIC	lrogers	t
+1078	Margaret	Oganda	moganda@isk.ac.ke	MUSIC TA	\N	\N	ES	UPPER ES MUSIC	moganda	t
+1077	Gwendolyn	Anding	ganding@isk.ac.ke	MUSIC TEACHER	\N	\N	HS	HS MUSIC	ganding	t
+1076	Mark	Anding	manding@isk.ac.ke	MUSIC TEACHER	\N	\N	MS	MS MUSIC	manding	t
+1075	Gakenia	Mucharie	gmucharie@isk.ac.ke	MUSIC TA	\N	\N	HS	HS MUSIC	gmucharie	t
+965	Joan	Awori	jawori28@isk.ac.ke	STUDENT	10475	8	MS	\N	jawori28	t
+966	Keza	Herman-Roloff	kherman-roloff29@isk.ac.ke	STUDENT	12196	7	MS	\N	kherman-roloff29	t
+967	Milan	Jayaram	mijayaram29@isk.ac.ke	STUDENT	10493	7	MS	\N	mijayaram29	t
+968	Nickolas	Jensen	njensen28@isk.ac.ke	STUDENT	11926	8	MS	\N	njensen28	t
+969	Noam	Waalewijn	nwaalewijn28@isk.ac.ke	STUDENT	12597	8	MS	\N	nwaalewijn28	t
+970	Wataru	Plunkett	wplunkett29@isk.ac.ke	STUDENT	12853	7	MS	\N	wplunkett29	t
+990	Penelope	Schrader	\N	STUDENT	12839	4	ES	\N	\N	t
+991	Rebecca	Von Platen-Hallermund	\N	STUDENT	12887	4	ES	\N	\N	t
+992	Sebastian	Chappell	\N	STUDENT	12577	5	ES	\N	\N	t
+994	Riley	Janisse	\N	STUDENT	12676	5	ES	\N	\N	t
+995	Adam	Johnson	\N	STUDENT	12327	5	ES	\N	\N	t
+1071	Noah	Ochomo	nochomo@isk.ac.ke	INVENTORY MANAGER	\N	\N	MS	INSTRUMENT STORE	nochomo	t
 \.
 
 
 --
--- TOC entry 3973 (class 0 OID 0)
--- Dependencies: 239
+-- TOC entry 3969 (class 0 OID 0)
+-- Dependencies: 236
 -- Name: all_instruments_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.all_instruments_id_seq', 348, true);
+SELECT pg_catalog.setval('public.all_instruments_id_seq', 350, true);
 
 
 --
--- TOC entry 3974 (class 0 OID 0)
--- Dependencies: 223
+-- TOC entry 3970 (class 0 OID 0)
+-- Dependencies: 216
 -- Name: class_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -5953,17 +5131,17 @@ SELECT pg_catalog.setval('public.class_id_seq', 1, false);
 
 
 --
--- TOC entry 3975 (class 0 OID 0)
--- Dependencies: 225
+-- TOC entry 3971 (class 0 OID 0)
+-- Dependencies: 218
 -- Name: dispatches_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.dispatches_id_seq', 127, true);
+SELECT pg_catalog.setval('public.dispatches_id_seq', 276, true);
 
 
 --
--- TOC entry 3976 (class 0 OID 0)
--- Dependencies: 243
+-- TOC entry 3972 (class 0 OID 0)
+-- Dependencies: 220
 -- Name: duplicate_instruments_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -5971,8 +5149,8 @@ SELECT pg_catalog.setval('public.duplicate_instruments_id_seq', 96, true);
 
 
 --
--- TOC entry 3977 (class 0 OID 0)
--- Dependencies: 245
+-- TOC entry 3973 (class 0 OID 0)
+-- Dependencies: 244
 -- Name: hardware_and_equipment_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -5980,26 +5158,44 @@ SELECT pg_catalog.setval('public.hardware_and_equipment_id_seq', 20, true);
 
 
 --
--- TOC entry 3978 (class 0 OID 0)
--- Dependencies: 235
+-- TOC entry 3974 (class 0 OID 0)
+-- Dependencies: 223
+-- Name: instrument_conditions_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.instrument_conditions_id_seq', 6, true);
+
+
+--
+-- TOC entry 3975 (class 0 OID 0)
+-- Dependencies: 224
 -- Name: instrument_history_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.instrument_history_id_seq', 3144, true);
+SELECT pg_catalog.setval('public.instrument_history_id_seq', 3534, true);
 
 
 --
--- TOC entry 3979 (class 0 OID 0)
--- Dependencies: 217
+-- TOC entry 3976 (class 0 OID 0)
+-- Dependencies: 248
+-- Name: instrument_requests_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.instrument_requests_id_seq', 84, true);
+
+
+--
+-- TOC entry 3977 (class 0 OID 0)
+-- Dependencies: 249
 -- Name: instruments_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.instruments_id_seq', 4166, true);
+SELECT pg_catalog.setval('public.instruments_id_seq', 4215, true);
 
 
 --
--- TOC entry 3980 (class 0 OID 0)
--- Dependencies: 215
+-- TOC entry 3978 (class 0 OID 0)
+-- Dependencies: 251
 -- Name: legacy_database_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6007,8 +5203,8 @@ SELECT pg_catalog.setval('public.legacy_database_id_seq', 669, true);
 
 
 --
--- TOC entry 3981 (class 0 OID 0)
--- Dependencies: 248
+-- TOC entry 3979 (class 0 OID 0)
+-- Dependencies: 253
 -- Name: locations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6016,8 +5212,17 @@ SELECT pg_catalog.setval('public.locations_id_seq', 16, true);
 
 
 --
--- TOC entry 3982 (class 0 OID 0)
--- Dependencies: 241
+-- TOC entry 3980 (class 0 OID 0)
+-- Dependencies: 226
+-- Name: lost_and_found_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.lost_and_found_id_seq', 15, true);
+
+
+--
+-- TOC entry 3981 (class 0 OID 0)
+-- Dependencies: 255
 -- Name: music_instruments_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6025,26 +5230,17 @@ SELECT pg_catalog.setval('public.music_instruments_id_seq', 544, true);
 
 
 --
--- TOC entry 3983 (class 0 OID 0)
--- Dependencies: 249
+-- TOC entry 3982 (class 0 OID 0)
+-- Dependencies: 257
 -- Name: new_instrument_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.new_instrument_id_seq', 11, true);
+SELECT pg_catalog.setval('public.new_instrument_id_seq', 44, true);
 
 
 --
--- TOC entry 3984 (class 0 OID 0)
--- Dependencies: 253
--- Name: receive_instrument_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.receive_instrument_id_seq', 1, false);
-
-
---
--- TOC entry 3985 (class 0 OID 0)
--- Dependencies: 229
+-- TOC entry 3983 (class 0 OID 0)
+-- Dependencies: 228
 -- Name: repairs_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6052,17 +5248,8 @@ SELECT pg_catalog.setval('public.repairs_id_seq', 1, false);
 
 
 --
--- TOC entry 3986 (class 0 OID 0)
--- Dependencies: 233
--- Name: requests_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.requests_id_seq', 1, false);
-
-
---
--- TOC entry 3987 (class 0 OID 0)
--- Dependencies: 231
+-- TOC entry 3984 (class 0 OID 0)
+-- Dependencies: 230
 -- Name: resolve_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6070,26 +5257,26 @@ SELECT pg_catalog.setval('public.resolve_id_seq', 1, false);
 
 
 --
--- TOC entry 3988 (class 0 OID 0)
--- Dependencies: 227
+-- TOC entry 3985 (class 0 OID 0)
+-- Dependencies: 232
 -- Name: returns_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.returns_id_seq', 98, true);
+SELECT pg_catalog.setval('public.returns_id_seq', 309, true);
 
 
 --
--- TOC entry 3989 (class 0 OID 0)
--- Dependencies: 219
+-- TOC entry 3986 (class 0 OID 0)
+-- Dependencies: 234
 -- Name: roles_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.roles_id_seq', 11, true);
+SELECT pg_catalog.setval('public.roles_id_seq', 12, true);
 
 
 --
--- TOC entry 3990 (class 0 OID 0)
--- Dependencies: 237
+-- TOC entry 3987 (class 0 OID 0)
+-- Dependencies: 258
 -- Name: students_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6097,8 +5284,8 @@ SELECT pg_catalog.setval('public.students_id_seq', 1069, true);
 
 
 --
--- TOC entry 3991 (class 0 OID 0)
--- Dependencies: 221
+-- TOC entry 3988 (class 0 OID 0)
+-- Dependencies: 259
 -- Name: users_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -6106,7 +5293,7 @@ SELECT pg_catalog.setval('public.users_id_seq', 1082, true);
 
 
 --
--- TOC entry 3693 (class 2606 OID 24691)
+-- TOC entry 3677 (class 2606 OID 31008)
 -- Name: equipment all_instruments_family_check; Type: CHECK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6115,7 +5302,7 @@ ALTER TABLE public.equipment
 
 
 --
--- TOC entry 3738 (class 2606 OID 24641)
+-- TOC entry 3708 (class 2606 OID 31010)
 -- Name: equipment all_instruments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6124,7 +5311,7 @@ ALTER TABLE ONLY public.equipment
 
 
 --
--- TOC entry 3718 (class 2606 OID 24273)
+-- TOC entry 3682 (class 2606 OID 30770)
 -- Name: class class_class_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6133,7 +5320,7 @@ ALTER TABLE ONLY public.class
 
 
 --
--- TOC entry 3720 (class 2606 OID 24271)
+-- TOC entry 3684 (class 2606 OID 30772)
 -- Name: class class_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6142,7 +5329,7 @@ ALTER TABLE ONLY public.class
 
 
 --
--- TOC entry 3722 (class 2606 OID 24285)
+-- TOC entry 3686 (class 2606 OID 30774)
 -- Name: dispatches dispatches_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6151,7 +5338,7 @@ ALTER TABLE ONLY public.dispatches
 
 
 --
--- TOC entry 3750 (class 2606 OID 24665)
+-- TOC entry 3688 (class 2606 OID 30776)
 -- Name: duplicate_instruments duplicate_instruments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6160,7 +5347,7 @@ ALTER TABLE ONLY public.duplicate_instruments
 
 
 --
--- TOC entry 3740 (class 2606 OID 24824)
+-- TOC entry 3710 (class 2606 OID 31012)
 -- Name: equipment equipment_code_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6169,7 +5356,7 @@ ALTER TABLE ONLY public.equipment
 
 
 --
--- TOC entry 3742 (class 2606 OID 24643)
+-- TOC entry 3712 (class 2606 OID 31014)
 -- Name: equipment equipment_description_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6178,7 +5365,7 @@ ALTER TABLE ONLY public.equipment
 
 
 --
--- TOC entry 3752 (class 2606 OID 24690)
+-- TOC entry 3730 (class 2606 OID 31016)
 -- Name: hardware_and_equipment hardware_and_equipment_description_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6187,7 +5374,7 @@ ALTER TABLE ONLY public.hardware_and_equipment
 
 
 --
--- TOC entry 3695 (class 2606 OID 24692)
+-- TOC entry 3678 (class 2606 OID 31017)
 -- Name: hardware_and_equipment hardware_and_equipment_family_check; Type: CHECK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6196,7 +5383,7 @@ ALTER TABLE public.hardware_and_equipment
 
 
 --
--- TOC entry 3754 (class 2606 OID 24688)
+-- TOC entry 3732 (class 2606 OID 31019)
 -- Name: hardware_and_equipment hardware_and_equipment_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6205,7 +5392,25 @@ ALTER TABLE ONLY public.hardware_and_equipment
 
 
 --
--- TOC entry 3734 (class 2606 OID 24369)
+-- TOC entry 3692 (class 2606 OID 30778)
+-- Name: instrument_conditions instrument_conditions_condition_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.instrument_conditions
+    ADD CONSTRAINT instrument_conditions_condition_key UNIQUE (condition);
+
+
+--
+-- TOC entry 3694 (class 2606 OID 30780)
+-- Name: instrument_conditions instrument_conditions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.instrument_conditions
+    ADD CONSTRAINT instrument_conditions_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 3690 (class 2606 OID 30782)
 -- Name: instrument_history instrument_history_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6214,16 +5419,16 @@ ALTER TABLE ONLY public.instrument_history
 
 
 --
--- TOC entry 3702 (class 2606 OID 24845)
+-- TOC entry 3716 (class 2606 OID 31153)
 -- Name: instruments instruments_code_number_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.instruments
-    ADD CONSTRAINT instruments_code_number_key UNIQUE (code, number);
+    ADD CONSTRAINT instruments_code_number_key UNIQUE (code, number) DEFERRABLE INITIALLY DEFERRED;
 
 
 --
--- TOC entry 3704 (class 2606 OID 24212)
+-- TOC entry 3718 (class 2606 OID 31023)
 -- Name: instruments instruments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6232,7 +5437,7 @@ ALTER TABLE ONLY public.instruments
 
 
 --
--- TOC entry 3706 (class 2606 OID 24214)
+-- TOC entry 3720 (class 2606 OID 31025)
 -- Name: instruments instruments_serial_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6241,7 +5446,7 @@ ALTER TABLE ONLY public.instruments
 
 
 --
--- TOC entry 3698 (class 2606 OID 23620)
+-- TOC entry 3736 (class 2606 OID 31027)
 -- Name: legacy_database legacy_database_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6250,7 +5455,7 @@ ALTER TABLE ONLY public.legacy_database
 
 
 --
--- TOC entry 3756 (class 2606 OID 25112)
+-- TOC entry 3738 (class 2606 OID 31029)
 -- Name: locations locations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6259,7 +5464,16 @@ ALTER TABLE ONLY public.locations
 
 
 --
--- TOC entry 3744 (class 2606 OID 24831)
+-- TOC entry 3696 (class 2606 OID 30784)
+-- Name: lost_and_found lost_and_found_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.lost_and_found
+    ADD CONSTRAINT lost_and_found_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 3742 (class 2606 OID 31031)
 -- Name: music_instruments music_instruments_code_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6268,7 +5482,7 @@ ALTER TABLE ONLY public.music_instruments
 
 
 --
--- TOC entry 3746 (class 2606 OID 24655)
+-- TOC entry 3744 (class 2606 OID 31033)
 -- Name: music_instruments music_instruments_description_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6277,7 +5491,7 @@ ALTER TABLE ONLY public.music_instruments
 
 
 --
--- TOC entry 3748 (class 2606 OID 24653)
+-- TOC entry 3746 (class 2606 OID 31035)
 -- Name: music_instruments music_instruments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6286,16 +5500,16 @@ ALTER TABLE ONLY public.music_instruments
 
 
 --
--- TOC entry 3760 (class 2606 OID 25134)
--- Name: receive_instrument receive_instrument_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- TOC entry 3748 (class 2606 OID 31037)
+-- Name: new_instrument new_instrument_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.receive_instrument
-    ADD CONSTRAINT receive_instrument_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.new_instrument
+    ADD CONSTRAINT new_instrument_pkey PRIMARY KEY (id);
 
 
 --
--- TOC entry 3726 (class 2606 OID 24320)
+-- TOC entry 3698 (class 2606 OID 30786)
 -- Name: repair_request repairs_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6304,25 +5518,16 @@ ALTER TABLE ONLY public.repair_request
 
 
 --
--- TOC entry 3730 (class 2606 OID 24802)
--- Name: requests requests_instrument_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- TOC entry 3734 (class 2606 OID 31039)
+-- Name: instrument_requests requests_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.requests
-    ADD CONSTRAINT requests_instrument_key UNIQUE (instrument);
-
-
---
--- TOC entry 3732 (class 2606 OID 24348)
--- Name: requests requests_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.requests
+ALTER TABLE ONLY public.instrument_requests
     ADD CONSTRAINT requests_pkey PRIMARY KEY (id);
 
 
 --
--- TOC entry 3728 (class 2606 OID 24334)
+-- TOC entry 3700 (class 2606 OID 30788)
 -- Name: resolve resolve_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6331,7 +5536,7 @@ ALTER TABLE ONLY public.resolve
 
 
 --
--- TOC entry 3724 (class 2606 OID 24306)
+-- TOC entry 3702 (class 2606 OID 30790)
 -- Name: returns returns_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6340,7 +5545,7 @@ ALTER TABLE ONLY public.returns
 
 
 --
--- TOC entry 3708 (class 2606 OID 24246)
+-- TOC entry 3704 (class 2606 OID 30792)
 -- Name: roles roles_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6349,7 +5554,7 @@ ALTER TABLE ONLY public.roles
 
 
 --
--- TOC entry 3710 (class 2606 OID 24248)
+-- TOC entry 3706 (class 2606 OID 30794)
 -- Name: roles roles_role_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6358,7 +5563,7 @@ ALTER TABLE ONLY public.roles
 
 
 --
--- TOC entry 3758 (class 2606 OID 24735)
+-- TOC entry 3740 (class 2606 OID 31041)
 -- Name: locations room; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6367,7 +5572,7 @@ ALTER TABLE ONLY public.locations
 
 
 --
--- TOC entry 3736 (class 2606 OID 24390)
+-- TOC entry 3728 (class 2606 OID 31043)
 -- Name: students students_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6376,7 +5581,7 @@ ALTER TABLE ONLY public.students
 
 
 --
--- TOC entry 3712 (class 2606 OID 24258)
+-- TOC entry 3722 (class 2606 OID 31045)
 -- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6385,7 +5590,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- TOC entry 3714 (class 2606 OID 24755)
+-- TOC entry 3724 (class 2606 OID 31047)
 -- Name: users users_number_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6394,7 +5599,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- TOC entry 3716 (class 2606 OID 24256)
+-- TOC entry 3726 (class 2606 OID 31049)
 -- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6403,7 +5608,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- TOC entry 3699 (class 1259 OID 24817)
+-- TOC entry 3713 (class 1259 OID 31050)
 -- Name: fki_instruments_code_fkey; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -6411,7 +5616,7 @@ CREATE INDEX fki_instruments_code_fkey ON public.instruments USING btree (code);
 
 
 --
--- TOC entry 3700 (class 1259 OID 24726)
+-- TOC entry 3714 (class 1259 OID 31051)
 -- Name: fki_instruments_description_fkey; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -6419,7 +5624,7 @@ CREATE INDEX fki_instruments_description_fkey ON public.instruments USING btree 
 
 
 --
--- TOC entry 3777 (class 2620 OID 24775)
+-- TOC entry 3769 (class 2620 OID 30795)
 -- Name: dispatches assign_user; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6427,7 +5632,15 @@ CREATE TRIGGER assign_user BEFORE INSERT ON public.dispatches FOR EACH ROW EXECU
 
 
 --
--- TOC entry 3779 (class 2620 OID 27161)
+-- TOC entry 3771 (class 2620 OID 30796)
+-- Name: lost_and_found log_instrument; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER log_instrument AFTER INSERT ON public.lost_and_found FOR EACH ROW EXECUTE FUNCTION public.log_transaction();
+
+
+--
+-- TOC entry 3772 (class 2620 OID 30797)
 -- Name: returns log_return; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6435,7 +5648,7 @@ CREATE TRIGGER log_return AFTER INSERT ON public.returns FOR EACH ROW EXECUTE FU
 
 
 --
--- TOC entry 3778 (class 2620 OID 24780)
+-- TOC entry 3770 (class 2620 OID 30798)
 -- Name: dispatches log_transaction; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6443,7 +5656,17 @@ CREATE TRIGGER log_transaction AFTER INSERT ON public.dispatches FOR EACH ROW EX
 
 
 --
--- TOC entry 3775 (class 2620 OID 24859)
+-- TOC entry 3775 (class 2620 OID 31052)
+-- Name: new_instrument log_transaction; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER log_transaction AFTER INSERT ON public.new_instrument FOR EACH ROW EXECUTE FUNCTION public.log_transaction();
+
+ALTER TABLE public.new_instrument DISABLE TRIGGER log_transaction;
+
+
+--
+-- TOC entry 3774 (class 2620 OID 31053)
 -- Name: instruments new_instr; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6451,7 +5674,7 @@ CREATE TRIGGER new_instr AFTER INSERT OR UPDATE ON public.instruments FOR EACH R
 
 
 --
--- TOC entry 3781 (class 2620 OID 24858)
+-- TOC entry 3776 (class 2620 OID 31054)
 -- Name: new_instrument new_instrument_trigger; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6459,7 +5682,7 @@ CREATE TRIGGER new_instrument_trigger AFTER INSERT ON public.new_instrument FOR 
 
 
 --
--- TOC entry 3780 (class 2620 OID 27835)
+-- TOC entry 3773 (class 2620 OID 30799)
 -- Name: returns return_trigger; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6467,7 +5690,7 @@ CREATE TRIGGER return_trigger BEFORE INSERT ON public.returns FOR EACH ROW EXECU
 
 
 --
--- TOC entry 3776 (class 2620 OID 24380)
+-- TOC entry 3768 (class 2620 OID 30800)
 -- Name: class trg_check_teacher_role; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -6475,7 +5698,7 @@ CREATE TRIGGER trg_check_teacher_role BEFORE INSERT OR UPDATE ON public.class FO
 
 
 --
--- TOC entry 3766 (class 2606 OID 24274)
+-- TOC entry 3749 (class 2606 OID 31055)
 -- Name: class class_teacher_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6484,7 +5707,7 @@ ALTER TABLE ONLY public.class
 
 
 --
--- TOC entry 3767 (class 2606 OID 24295)
+-- TOC entry 3750 (class 2606 OID 31060)
 -- Name: dispatches dispatches_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6493,7 +5716,16 @@ ALTER TABLE ONLY public.dispatches
 
 
 --
--- TOC entry 3773 (class 2606 OID 24375)
+-- TOC entry 3751 (class 2606 OID 31065)
+-- Name: dispatches dispatches_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.dispatches
+    ADD CONSTRAINT dispatches_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES public.users(id) ON UPDATE CASCADE NOT VALID;
+
+
+--
+-- TOC entry 3752 (class 2606 OID 31070)
 -- Name: instrument_history instrument_history_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6502,7 +5734,7 @@ ALTER TABLE ONLY public.instrument_history
 
 
 --
--- TOC entry 3761 (class 2606 OID 24825)
+-- TOC entry 3759 (class 2606 OID 31075)
 -- Name: instruments instruments_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6511,7 +5743,7 @@ ALTER TABLE ONLY public.instruments
 
 
 --
--- TOC entry 3762 (class 2606 OID 24721)
+-- TOC entry 3760 (class 2606 OID 31080)
 -- Name: instruments instruments_description_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6520,7 +5752,7 @@ ALTER TABLE ONLY public.instruments
 
 
 --
--- TOC entry 3763 (class 2606 OID 24738)
+-- TOC entry 3761 (class 2606 OID 31085)
 -- Name: instruments instruments_location_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6529,16 +5761,25 @@ ALTER TABLE ONLY public.instruments
 
 
 --
--- TOC entry 3774 (class 2606 OID 25135)
--- Name: receive_instrument receive_instruments_instrument_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- TOC entry 3762 (class 2606 OID 31090)
+-- Name: instruments instruments_state_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.receive_instrument
-    ADD CONSTRAINT receive_instruments_instrument_id_fk FOREIGN KEY (instrument_id) REFERENCES public.instruments(id) ON UPDATE CASCADE NOT VALID;
+ALTER TABLE ONLY public.instruments
+    ADD CONSTRAINT instruments_state_fkey FOREIGN KEY (state) REFERENCES public.instrument_conditions(condition) ON UPDATE CASCADE NOT VALID;
 
 
 --
--- TOC entry 3769 (class 2606 OID 24796)
+-- TOC entry 3753 (class 2606 OID 31095)
+-- Name: lost_and_found lost_and_found_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.lost_and_found
+    ADD CONSTRAINT lost_and_found_item_id_fkey FOREIGN KEY (item_id) REFERENCES public.instruments(id) ON UPDATE CASCADE;
+
+
+--
+-- TOC entry 3754 (class 2606 OID 31100)
 -- Name: repair_request repairs_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6547,25 +5788,34 @@ ALTER TABLE ONLY public.repair_request
 
 
 --
--- TOC entry 3771 (class 2606 OID 24808)
--- Name: requests requests_instrument_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- TOC entry 3765 (class 2606 OID 31105)
+-- Name: instrument_requests requests_attended_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.requests
-    ADD CONSTRAINT requests_instrument_fkey FOREIGN KEY (instrument) REFERENCES public.equipment(description) NOT VALID;
-
-
---
--- TOC entry 3772 (class 2606 OID 24351)
--- Name: requests requests_teacher_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.requests
-    ADD CONSTRAINT requests_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES public.users(id);
+ALTER TABLE ONLY public.instrument_requests
+    ADD CONSTRAINT requests_attended_by_id_fkey FOREIGN KEY (attended_by_id) REFERENCES public.users(id) ON UPDATE CASCADE NOT VALID;
 
 
 --
--- TOC entry 3770 (class 2606 OID 24335)
+-- TOC entry 3766 (class 2606 OID 31110)
+-- Name: instrument_requests requests_instrument_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.instrument_requests
+    ADD CONSTRAINT requests_instrument_fkey FOREIGN KEY (instrument) REFERENCES public.equipment(description);
+
+
+--
+-- TOC entry 3767 (class 2606 OID 31115)
+-- Name: instrument_requests requests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.instrument_requests
+    ADD CONSTRAINT requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
+-- TOC entry 3755 (class 2606 OID 30801)
 -- Name: resolve resolve_case_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6574,7 +5824,16 @@ ALTER TABLE ONLY public.resolve
 
 
 --
--- TOC entry 3768 (class 2606 OID 24791)
+-- TOC entry 3756 (class 2606 OID 31120)
+-- Name: returns returns_former_user_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.returns
+    ADD CONSTRAINT returns_former_user_id FOREIGN KEY (former_user_id) REFERENCES public.users(id) ON UPDATE CASCADE NOT VALID;
+
+
+--
+-- TOC entry 3757 (class 2606 OID 31125)
 -- Name: returns returns_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6583,7 +5842,16 @@ ALTER TABLE ONLY public.returns
 
 
 --
--- TOC entry 3764 (class 2606 OID 25155)
+-- TOC entry 3758 (class 2606 OID 31130)
+-- Name: returns returns_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.returns
+    ADD CONSTRAINT returns_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON UPDATE CASCADE NOT VALID;
+
+
+--
+-- TOC entry 3763 (class 2606 OID 31135)
 -- Name: users user_room_fk; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6592,7 +5860,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- TOC entry 3765 (class 2606 OID 24259)
+-- TOC entry 3764 (class 2606 OID 31140)
 -- Name: users users_role_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6600,7 +5868,7 @@ ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_role_fkey FOREIGN KEY (role) REFERENCES public.roles(role_name);
 
 
--- Completed on 2024-03-13 09:58:07 EAT
+-- Completed on 2024-06-24 16:35:20 EAT
 
 --
 -- PostgreSQL database dump complete

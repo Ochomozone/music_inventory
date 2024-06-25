@@ -16,6 +16,7 @@ router.get('/', async (req, res) => {
         } else if (userId) {
                 dispatchedInstruments = await db.getDispatchedInstrumentsByUserId(userId);
         }else if (description && number) {
+            console.log('description and number', description, number);
             dispatchedInstruments = await db.getDispatchedInstrumentsBYDescriptionNumber(description, number);
         } else if (description) {
             dispatchedInstruments = await db.getDispatchedInstrumentsBYDescription(description);
@@ -31,10 +32,11 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-    const {description, profileId, username, number, userId} = req.body;
+    const {description, profileId, username, number, userId, fullname} = req.body;
+
     try {
         await db.createDispatch(description, profileId, username, number, userId);
-        res.status(201).json({message: `${description} number ${number} dispatched to user ${username}`});
+        res.status(201).json({message: `${description} number ${number} dispatched to user ${fullname}`});
     } catch (error) {
         console.error('Error dispatching instrument:', error);
         res.status(500).json({error: 'Internal server error'});

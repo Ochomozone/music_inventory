@@ -1,9 +1,9 @@
 const {query, pool} = require('./dbCore.js');
 const getDispatchedInstruments = async () => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id, issued_on
                         FROM instruments 
                         WHERE user_id IS NOT NULL
-                        ORDER BY user_name, description, number`;
+                        ORDER BY issued_on, user_name, description, number`;
     try {
         const instruments = await query(queryText);
         return instruments;
@@ -14,12 +14,12 @@ const getDispatchedInstruments = async () => {
 };
 
 const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id, issued_on
                         FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
                         AND number = $2
-                        ORDER BY user_name, description, number`;
+                        ORDER BY issued_on,user_name, description, number`;
     try {
         const instruments = await query(queryText, [description, number]);
         return instruments;
@@ -30,11 +30,11 @@ const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) 
 };
 
 const getDispatchedInstrumentsBYDescription = async (description) => {
-    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id, issued_on 
                         FROM instruments 
                         WHERE user_id IS NOT NULL
                         AND description ILIKE '%'||$1||'%'
-                        ORDER BY user_name, description, number`;
+                        ORDER BY issued_on, user_name, description, number`;
     try {
         const instruments = await query(queryText, [description]);
         return instruments;
@@ -46,10 +46,10 @@ const getDispatchedInstrumentsBYDescription = async (description) => {
 
 const getDispatchedInstrumentsByUserIds = async (userIds) => {
     const queryText = `
-        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id, issued_on 
         FROM instruments
         WHERE user_id IN (${userIds.map((_, i) => `$${i + 1}`).join(',')})
-        ORDER BY user_name, description, number
+        ORDER BY issued_on, user_name, description, number
     `;
     try {
         const { rows } = await pool.query(queryText, userIds);
@@ -62,10 +62,10 @@ const getDispatchedInstrumentsByUserIds = async (userIds) => {
 
 const getDispatchedInstrumentsByUserId = async (userId) => {
     const queryText = `
-        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id 
+        SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name, user_id, issued_on 
         FROM instruments
         WHERE user_id = $1
-        ORDER BY user_name, description, number
+        ORDER BY user_name, description, number, issued_on desc
     `;
     try {
         const { rows } = await pool.query(queryText, [userId]);

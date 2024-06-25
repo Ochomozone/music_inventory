@@ -71,7 +71,6 @@ const getInstrumentById = async (instrumentId) => {
 };
 
 const getInstrumentIdByDescriptionNumber = async (description, number) => {
-    // const queryText = 'SELECT get_item_id_by_description($1, $2) AS id';
     const queryText = `SELECT id FROM instruments WHERE description ILIKE '%'||$1||'%' AND number = $2`
     try {
         const result = await query(queryText, [description, number]);
@@ -102,6 +101,7 @@ const getInstrumentsByDescription = async (description) => {
 };
 
 const getInstrumentByNumber = async (description, number) => {
+    console.log('description and number from getInstrumentByNumber,', description, number);
     const queryText = `
         SELECT 
             i.id,
@@ -114,7 +114,7 @@ const getInstrumentByNumber = async (description, number) => {
             i.serial,
             i.location,
             i.user_name,
-            i.state
+            i.state,
             u.grade_level,
             u.email
         FROM 
@@ -129,6 +129,7 @@ const getInstrumentByNumber = async (description, number) => {
     try {
         const instrument = await query(queryText, [description, number]);
         return instrument;
+        
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
         throw error;
@@ -212,6 +213,20 @@ const getAllAvailableInstruments = async () => {
         }
     };
 
+    const swapCases = (code, id1, id2, created_by) => {
+        const queryText = `INSERT INTO swap_cases(instr_code, item_id_1, item_id_2, created_by)
+                    VALUES ($1, $2, $3, $4);`;
+        try {
+            const result = query(queryText, [code, id1, id2, created_by]);
+            return result;
+        } catch (error) {
+            console.error('Error swapping cases:', error);
+            throw error;
+        }
+    }
+
+    
+
 
     module.exports = {
         getAllAvailableInstruments,
@@ -227,5 +242,6 @@ const getAllAvailableInstruments = async () => {
         getInstrumentStates,
         getLocations,
         createInstrument,
-        getEquipmentTypeDescription
+        getEquipmentTypeDescription,
+        swapCases
     };

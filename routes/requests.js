@@ -154,6 +154,7 @@ router.get('/', async (req, res) => {
         
                     result[unique_id].instrumentData.push({
                         instrument,
+                        requestId: id,
                         quantity,
                         instruments_granted: instrumentDetails.length > 0 ? instrumentDetails : undefined
                     });
@@ -192,7 +193,7 @@ router.delete('/', async (req, res) => {
 router.patch('/', async (req, res) => {
     console.log('req.body:', req.body)
     const { id, status, success, uniqueId, notes, attendedBy, attendedById, creatorName, creatorId, instrumentsGranted } = req.body;
-    if (!attendedBy || !attendedById) {
+    if (!attendedBy || !attendedById || id === '0') {
         return res.status(400).json({ error: 'Invalid request body' });
     }
     try {
