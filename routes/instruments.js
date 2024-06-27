@@ -70,9 +70,9 @@ router.post('/', async (req, res) => {
 
 });
 router.post('/swap', async (req, res) => {
-    const {code, id1, id2, created_by} = req.body;
+    const {code, id_1, id_2, created_by} = req.body;
     try {
-        await db.swapCases(code, id1, id2, created_by);
+        await db.swapCases(code, id_1, id_2, created_by);
         res.status(201).json({message: `Instrument Cases swapped succesfully! `});
     } catch (error) {
         console.error('Error swapping instrument:', error);

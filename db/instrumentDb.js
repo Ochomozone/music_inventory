@@ -101,7 +101,6 @@ const getInstrumentsByDescription = async (description) => {
 };
 
 const getInstrumentByNumber = async (description, number) => {
-    console.log('description and number from getInstrumentByNumber,', description, number);
     const queryText = `
         SELECT 
             i.id,
@@ -213,11 +212,11 @@ const getAllAvailableInstruments = async () => {
         }
     };
 
-    const swapCases = (code, id1, id2, created_by) => {
+    const swapCases = (code, id_1, id_2, created_by) => {
         const queryText = `INSERT INTO swap_cases(instr_code, item_id_1, item_id_2, created_by)
                     VALUES ($1, $2, $3, $4);`;
         try {
-            const result = query(queryText, [code, id1, id2, created_by]);
+            const result = query(queryText, [code, id_1, id_2, created_by]);
             return result;
         } catch (error) {
             console.error('Error swapping cases:', error);
