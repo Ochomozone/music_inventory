@@ -70,6 +70,19 @@ const getInstrumentById = async (instrumentId) => {
     }
 };
 
+const getInstrumentBySerial = async (serialNo) => {
+    const queryText = `SELECT id, INITCAP(description) AS description, code, legacy_code, number, INITCAP(make) AS make, model, serial, location, user_name 
+                        FROM instruments 
+                        WHERE serial = $1`;
+    try {
+        const instrument = await query(queryText, [serialNo]);
+        return instrument;
+    } catch (error) {
+        console.error('Error fetching instrument by ID:', error);
+        throw error;
+    }
+};
+
 const getInstrumentIdByDescriptionNumber = async (description, number) => {
     const queryText = `SELECT id FROM instruments WHERE description ILIKE '%'||$1||'%' AND number = $2`
     try {
@@ -223,6 +236,17 @@ const getAllAvailableInstruments = async () => {
             throw error;
         }
     }
+    const takeStock = async (location, item_id, description, number, status, created_by, notes) => {
+        const queryText = `INSERT INTO take_stock(location, item_id, description, number, status, created_by, notes)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7);`;
+        try {
+            const result = query(queryText, [location, item_id, description, number, status, created_by, notes]);
+            return result;
+        } catch (error) {
+            console.error('An Error Occurred:', error);
+            throw error;
+        }
+    }
 
     
 
@@ -238,9 +262,11 @@ const getAllAvailableInstruments = async () => {
         getInstrumentIdByDescriptionNumber,
         getInstruments,
         getInstrumentsByDescription,
+        getInstrumentBySerial,
         getInstrumentStates,
         getLocations,
         createInstrument,
         getEquipmentTypeDescription,
-        swapCases
+        swapCases,
+        takeStock
     };

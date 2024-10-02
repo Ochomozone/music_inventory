@@ -26,7 +26,7 @@ router.get('/location', async (req, res) => {
 });
 
 router.get('/', async (req, res) => {
-    let { instrumentId, description, number, code } = req.query;
+    let { instrumentId, description, number, code, serialNo } = req.query;
     number = req.query.number ? parseInt(req.query.number, 10) : undefined;
     if (code && code.length > 0) {
         try {
@@ -41,7 +41,9 @@ router.get('/', async (req, res) => {
         let instruments;
         if (instrumentId) {
             instruments = await db.getInstrumentById(instrumentId);
-        } else if (description && number) {
+        } else if (serialNo) {
+            instruments = await db.getInstrumentBySerial(serialNo);
+        } else if(description && number) {
             instruments = await db.getInstrumentByNumber(description, number);
         } else if (description) {
             instruments = await db.getInstrumentsByDescription(description);
@@ -78,6 +80,17 @@ router.post('/swap', async (req, res) => {
         console.error('Error swapping instrument:', error);
         res.status(500).json({error: 'Internal server error'});
     }
+});
+router.post('/takeStock', async (req, res) => {
+    const {location, item_id, description, number, status, created_by, notes} = req.body;
+    try {
+        await db.takeStock(location, item_id, description, number, status, created_by, notes);
+        res.status(201).json({message: `${description} number ${number} confirmed in ${location}`});
+    } catch (error) {
+        console.error('An error occurred:', error);
+        res.status(500).json({error: 'Internal server error'});
+    }
+
 });
 
 
