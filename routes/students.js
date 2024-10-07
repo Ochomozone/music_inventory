@@ -21,6 +21,7 @@ router.get('/', async (req, res) => {
     }
 });
 
+
 router.post('/', async (req, res) => {
     const { student_number, first_name, last_name, email, parent1_email, parent2_email, grade_level } = req.body;
     const student = {
@@ -43,7 +44,7 @@ router.post('/', async (req, res) => {
 );
 
 router.patch('/', async (req, res) => {
-    const { student_number, first_name, last_name, email, parent1_email, parent2_email, grade_level } = req.body;
+    const { student_number, first_name, last_name, email, parent1_email, parent2_email, grade_level} = req.body;
     // Check if student number is provided
     if (!student_number) {
         return res.status(400).json({ error: 'Student number is required' });
@@ -56,9 +57,9 @@ router.patch('/', async (req, res) => {
         ...(email ? { email } : {}),
         ...(parent1_email ? { parent1_email } : {}),
         ...(parent2_email ? { parent2_email } : {}),
-        ...(grade_level ? { grade_level } : {})
+        ...(grade_level ? { grade_level } : {}),
+        
     };
-    
     try {
         const updatedStudent = await db.updateStudent(student);
         res.json(updatedStudent);

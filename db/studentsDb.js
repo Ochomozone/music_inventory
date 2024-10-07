@@ -15,6 +15,22 @@ const searchStudentByNumber = async (studentNumber) => {
         throw error;
     }
 };
+
+const searchStudentByUserNumber = async (studentNumber) => {
+    const queryText = `
+    SELECT *
+    FROM users
+    WHERE users.number = $1
+    ORDER BY users.first_name ,users.last_name
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [studentNumber]);
+        return rows;
+    } catch (error) {
+        console.error('Error searching student by number:', error);
+        throw error;
+    }
+};
 const searchStudentbyEmail = async (email) => {
     const queryText = `
     SELECT *
@@ -67,17 +83,16 @@ const addNewStudent = async (student) => {
 
 const updateStudent = async (student) => {     
     // Check if student exists with that student number
-    const studentCheck = await searchStudentByNumber(student.student_number);
+    const studentCheck = await searchStudentByUserNumber(student.student_number);
     if (studentCheck.length === 0) {
         return { error: 'Student does not exist' };
     }
 
-    // Build the dynamic query text and values array
     let queryText = 'UPDATE students SET ';
     const queryValues = [];
     let queryIndex = 2; // Start from $2 because $1 is the student_number for the WHERE clause
 
-    // Add fields to update if they are provided
+    
     if (student.first_name) {
         queryText += `first_name = $${queryIndex}, `;
         queryValues.push(student.first_name);
@@ -115,7 +130,6 @@ const updateStudent = async (student) => {
     // Add the WHERE clause
     queryText += ` WHERE student_number = $1 RETURNING *`;
     queryValues.unshift(student.student_number);  // Add student_number at the start of the values array
-
     try {
         const { rows } = await pool.query(queryText, queryValues);
         return rows[0];
@@ -130,6 +144,7 @@ module.exports = {
     getAllStudents,
     searchStudentbyEmail,
     searchStudentByNumber,
+    searchStudentByUserNumber,
     addNewStudent,
     updateStudent
 };

@@ -98,8 +98,8 @@ const searchUsersByClass = async (classValue) => {
     const queryText = `
     SELECT *
     FROM all_users_view
-    WHERE all_users_view.class ILIKE $1
-    ORDER BY all_users_view.class ,all_users_view.division, all_users_view.full_name
+    WHERE all_users_view.class LIKE $1
+    ORDER BY all_users_view.class, all_users_view.division, all_users_view.full_name
     `;
     try {
         const { rows } = await pool.query(queryText, [`%${classValue}%`]);
@@ -109,6 +109,7 @@ const searchUsersByClass = async (classValue) => {
         throw error;
     }
 };
+
 const getAllUsers = async () => {
     const queryText = `SELECT * FROM all_users_view ORDER BY full_name`;
     try {
