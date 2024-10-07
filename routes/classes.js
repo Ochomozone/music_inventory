@@ -13,11 +13,13 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/students', async (req, res) => {
+    console.log('req.query:', req.query);
     const classId  = req.query.classId;
+    const userId = req.query.userId ? req.query.userId : null;
 
-    if (!classId ) {
+    if (!classId && !userId) {
         return res.status(400).json({ error: 'classId is required and cannot be blank' });
-    }
+    } else if (classId) {
 
     try {
         const students = await db.getStudentsInClass(classId);
@@ -26,6 +28,15 @@ router.get('/students', async (req, res) => {
         console.error('Error fetching students in class:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
+} else {
+    try {
+        const classes = await db.getClassesForStudent(userId);
+        res.json(classes);
+    } catch (error) {
+        console.error('Error fetching classes for student:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}
 });
 
 

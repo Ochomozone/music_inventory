@@ -38,6 +38,21 @@ const getStudentsInClass = async (classId) => {
         throw error;
     }
 };
+
+const getClassesForStudent = async (userId) => {
+    const queryText = `
+    SELECT * FROM class_students_view
+    WHERE user_id = $1
+    ORDER BY class_name
+    `;
+    try {
+        const classes = await query(queryText, [userId]);
+        return classes;
+    } catch (error) {
+        console.error('Error fetching classes for student:', error);
+        throw error;
+    }
+};
 const addNewStudent = async (studentId, classId) => {
     const queryText = `
     INSERT INTO class_students(user_id, class_id)
@@ -89,4 +104,5 @@ module.exports = {
     addNewStudent,
     removeStudentFromClass,
     setPrimaryInstrument,
+    getClassesForStudent
 };
