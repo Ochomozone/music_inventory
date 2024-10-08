@@ -13,7 +13,6 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/students', async (req, res) => {
-    console.log('req.query:', req.query);
     const classId  = req.query.classId;
     const userId = req.query.userId ? req.query.userId : null;
 

@@ -12,7 +12,7 @@ const searchUsersById = async (databaseId) => {
         return rows;
     } catch (error) {
         console.error('Error searching users by division:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 
@@ -28,7 +28,7 @@ const searchUsersByNameAndDivision = async (userName, userDivision) => {
         return rows;
     } catch (error) {
         console.error('Error searching users by division:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 
@@ -44,7 +44,7 @@ const searchUsersByNameAndClass = async (userName, classValue) => {
         return rows;
     } catch (error) {
         console.error('Error searching users:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 const searchUsersByDivisionAndClass = async (userDivision, classValue) => {
@@ -60,7 +60,7 @@ const searchUsersByDivisionAndClass = async (userDivision, classValue) => {
         return rows;
     } catch (error) {
         console.error('Error searching users:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 const searchUsersByName = async (userName) => {
@@ -75,7 +75,7 @@ const searchUsersByName = async (userName) => {
         return rows;
     } catch (error) {
         console.error('Error searching users by name:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 const searchUsersByDivision = async (userDivision) => {
@@ -90,7 +90,7 @@ const searchUsersByDivision = async (userDivision) => {
         return rows;
     } catch (error) {
         console.error('Error searching users by division:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 
@@ -106,7 +106,7 @@ const searchUsersByClass = async (classValue) => {
         return rows;
     } catch (error) {
         console.error('Error searching users by division:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 
@@ -117,25 +117,22 @@ const getAllUsers = async () => {
         return users;
     } catch (error) {
         console.error('Error fetching users:', error);
-        throw error;
+        return {error: 'An error occurred while retrieving user data'};
     }
 };
 const getUserByEmail = async (email) => {
-    queryText = `SELECT * FROM all_users_view WHERE email = $1`;
+    const queryText = `SELECT * FROM all_users_view WHERE email = $1`;
     try {
         const { rows } = await pool.query(queryText, [email]);
         if (rows.length === 1) {
-            const id = rows[0].id;
-            const division = rows[0].division;
-            const role = rows[0].role;
-            const room = rows[0].room;
+            const { id, division, role, room } = rows[0];
             return { id, division, role, room };
         } else {
-            throw new Error('User not found');
+            return { error: 'User not found' };
         }
     } catch (error) {
-        console.error('Error retrieving user ID:', error);
-        throw error;
+        console.error('Error retrieving user:', error);
+        return { error};
     }
 };
 

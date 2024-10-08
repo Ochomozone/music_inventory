@@ -6,7 +6,7 @@ const getAllClasses = async () => {
         return classes;
     } catch (error) {
         console.error('Error fetching classes:', error);
-        throw error;
+        return {error: 'Error fetching classes:'};
     }
 };
 
@@ -21,7 +21,7 @@ const addNewClass = async (class_name, teacher_id) => {
         return rows[0];
     } catch (error) {
         console.error('Error adding new class:', error);
-        throw error;
+        return {error: 'Error adding new class:'};
     }
 };
 const getStudentsInClass = async (classId) => {
@@ -35,7 +35,7 @@ const getStudentsInClass = async (classId) => {
         return students;
     } catch (error) {
         console.error('Error fetching students in class:', error);
-        throw error;
+        return {error: 'Error fetching students in class:'}
     }
 };
 
@@ -50,7 +50,7 @@ const getClassesForStudent = async (userId) => {
         return classes;
     } catch (error) {
         console.error('Error fetching classes for student:', error);
-        throw error;
+        return {error: 'Error fetching classes for student:'}
     }
 };
 const addNewStudent = async (studentId, classId) => {
@@ -64,7 +64,7 @@ const addNewStudent = async (studentId, classId) => {
         return rows[0];
     } catch (error) {
         console.error('Error adding new student to class:', error);
-        throw error;
+        return {error: 'Error adding new student to class:'}
     }
 };
 const removeStudentFromClass = async (userId, classId) => {
@@ -78,7 +78,7 @@ const removeStudentFromClass = async (userId, classId) => {
         return rows[0];
     } catch (error) {
         console.error('Error removing student from class:', error);
-        throw error;
+        return {error:'Error removing student from class:' }
     }
 };
 const setPrimaryInstrument = async (userId, classId, instrument) => {
@@ -93,7 +93,7 @@ const setPrimaryInstrument = async (userId, classId, instrument) => {
         return rows[0];
     } catch (error) {
         console.error('Error setting primary instrument:', error);
-        throw error;
+        return {error:'Error setting primary instrument:' }
     }
 };
 

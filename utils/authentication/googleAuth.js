@@ -1,7 +1,9 @@
 // routes/authGoogle.js
+
 const express = require('express');
 const fetch = require('node-fetch');
 const router = express.Router();
+const db = require('../../db/usersDb.js');
 
 router.post('/auth/google', async (req, res) => {
   const authorizationHeader = req.headers['authorization'];
@@ -20,11 +22,18 @@ router.post('/auth/google', async (req, res) => {
           'Authorization': `Bearer ${accessToken}`
         }
       });
-      const userInfo = await responseUserInfo.json();
+      const userProfile = await responseUserInfo.json();
+      const { id, division, role, room}  = await db.getUserByEmail(userProfile.email);
+        const username = userProfile.email.split('@')[0];
+        userProfile.username = username;
+        userProfile.databaseId = id;
+        userProfile.role = role;
+        userProfile.division = division;
+        userProfile.room = room;
 
-      if (responseUserInfo.ok) {
+      if (responseUserInfo.ok && userProfile.databaseId) {
 
-        res.json(userInfo);
+        res.json(userProfile);
       } else {
         res.status(500).send('Failed to fetch user info from Google');
       }

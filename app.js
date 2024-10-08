@@ -39,8 +39,7 @@ const returnInstrumentRouter = require('./routes/returns');
 const usersRouter = require('./routes/users');
 const equipmentRouter = require('./routes/equipment');
 const historyRouter = require('./routes/history');
-const userProfileRouter = require('./utils/authentication/userProfile');
-const googleAuthRouter = require('./utils/authentication/GoogleAuth');
+const googleAuthRouter = require('./utils/authentication/googleAuth');
 const lostAndFoundRouter = require('./routes/lostAndFound');
 const requestsRouter = require('./routes/requests');
 const studentsRouter = require('./routes/students');
@@ -54,7 +53,6 @@ app.use(
 );
 
 app.use(googleAuthRouter); 
-app.use(userProfileRouter);
 
 app.use('/instruments', instrumentsRouter);
 app.use('/checkouts', checkoutsRouter);

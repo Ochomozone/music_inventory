@@ -9,7 +9,7 @@ const getDispatchedInstruments = async () => {
         return instruments;
     } catch (error) {
         console.error('Error fetching instruments:', error);
-        throw error;
+        return {error}
     }
 };
 
