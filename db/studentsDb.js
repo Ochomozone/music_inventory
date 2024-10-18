@@ -12,7 +12,7 @@ const searchStudentByNumber = async (studentNumber) => {
         return rows;
     } catch (error) {
         console.error('Error searching student by number:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -28,7 +28,7 @@ const searchStudentByUserNumber = async (studentNumber) => {
         return rows;
     } catch (error) {
         console.error('Error searching student by number:', error);
-        throw error;
+        return{error};
     }
 };
 const searchStudentbyEmail = async (email) => {
@@ -43,7 +43,7 @@ const searchStudentbyEmail = async (email) => {
         return rows;
     } catch (error) {
         console.error('Error searching students by email:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -54,7 +54,7 @@ const getAllStudents = async () => {
         return users;
     } catch (error) {
         console.error('Error fetching students:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -70,14 +70,14 @@ const addNewStudent = async (student) => {
             student.first_name,
             student.last_name,
             student.email,
-            student.parent1_email,
-            student.parent2_email,
+            student.parent1mail,
+            student.parent2Email,
             student.grade_level
         ]);
         return rows[0];
     } catch (error) {
         console.error('Error adding new student:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -135,7 +135,7 @@ const updateStudent = async (student) => {
         return rows[0];
     } catch (error) {
         console.error('Error updating student:', error);
-        throw error;
+        return{error};
     }
 };
 

@@ -44,6 +44,7 @@ const lostAndFoundRouter = require('./routes/lostAndFound');
 const requestsRouter = require('./routes/requests');
 const studentsRouter = require('./routes/students');
 const classesRouter = require('./routes/classes');
+const staffRouter = require('./routes/staff');
 
 app.use(bodyParser.json());
 app.use(
@@ -65,6 +66,7 @@ app.use('/lost', lostAndFoundRouter);
 app.use('/requests', requestsRouter);
 app.use('/students', studentsRouter);
 app.use('/classes', classesRouter);
+app.use('/staff', staffRouter);
 
 
 app.listen(PORT, () => {

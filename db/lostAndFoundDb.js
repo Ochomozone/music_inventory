@@ -7,7 +7,7 @@ const allLostAndFound = async () => {
         return rows;
     } catch (error) {
         console.error('Error fetching:', error);
-        throw error;
+        return{error};
     }
  };
  const checkLostAndFound = async (itemId) => {
@@ -22,7 +22,7 @@ const allLostAndFound = async () => {
         return rows;
     } catch (error) {
         console.error('Error fetching:', error);
-        throw error;
+        return{error};
     }
  };
 
@@ -35,7 +35,7 @@ const allLostAndFound = async () => {
         return rows;
     } catch (error) {
         console.error('Error creating lost and found:', error);
-        throw error;
+        return{error};
     }
  };
 

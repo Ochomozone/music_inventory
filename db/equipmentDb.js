@@ -6,8 +6,7 @@ const getAllEquipmentType = async () => {
         const equipmentTypes = await query(queryText);
         return equipmentTypes;
     } catch (error) {
-        console.error('Error fetching equipment types:', error);
-        throw error;
+        return { error};
     }
 };
 
@@ -19,8 +18,7 @@ const getEquipmentTypeDescription = async (description) => {
         const equipmentTypes = await query(queryText, [`%${description}%`]);
         return equipmentTypes;
     } catch (error) {
-        console.error('Error fetching equipment types:', error);
-        throw error;
+        return { error};
     }
 };
 
@@ -31,8 +29,7 @@ const getExistingInstrumentDescriptions = async () => {
         const instruments = await query(queryText);
         return instruments;
     } catch (error) {
-        console.error('Error fetching instruments:', error);
-        throw error;
+        return { error};
     }
 };
 

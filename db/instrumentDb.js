@@ -7,8 +7,8 @@ const getInstruments = async () => {
         const instruments = await query(queryText);
         return instruments;
     } catch (error) {
-        console.error('Error fetching instruments:', error);
-        throw error;
+        return { error};
+        // return{error};
     }
 };
 const getExistingInstrumentDescriptions = async () => {
@@ -19,7 +19,7 @@ const getExistingInstrumentDescriptions = async () => {
         return instruments;
     } catch (error) {
         console.error('Error fetching instruments:', error);
-        throw error;
+        return{error};
     }
 };
 const getLocations = async () => {
@@ -29,7 +29,7 @@ const getLocations = async () => {
         return locations;
     } catch (error) {
         console.error('Error fetching instruments:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -40,7 +40,7 @@ const getInstrumentStates = async () => {
         return conditions;
     } catch (error) {
         console.error('Error fetching instrument conditions:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -53,7 +53,7 @@ const createInstrument = async (description, make, model, serial, instrumentStat
         return instruments;
     } catch (error) {
         console.error('Error storing instruments:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -66,7 +66,7 @@ const getInstrumentById = async (instrumentId) => {
         return instrument;
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -79,7 +79,7 @@ const getInstrumentBySerial = async (serialNo) => {
         return instrument;
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -94,7 +94,7 @@ const getInstrumentIdByDescriptionNumber = async (description, number) => {
         }
     } catch (error) {
         console.error('Error fetching instrument ID by description and number:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -109,7 +109,7 @@ const getInstrumentsByDescription = async (description) => {
         return instrument;
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -144,7 +144,7 @@ const getInstrumentByNumber = async (description, number) => {
         
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -157,7 +157,7 @@ const getInstrumentDescriptionByOldCode = async (code) => {
         return rows[0].description;
     } catch (error) {
         console.error('Error fetching instrument by ID:', error);
-        throw error;
+        return{error};
     }
 };
 const getAllAvailableInstruments = async () => {
@@ -172,7 +172,7 @@ const getAllAvailableInstruments = async () => {
             return rows;
         } catch (error) {
             console.error('Error fetching dispatched instruments by user IDs:', error);
-            throw error;
+            return{error};
         }
     };
     
@@ -190,7 +190,7 @@ const getAllAvailableInstruments = async () => {
             return instrument;
         } catch (error) {
             console.error('Error fetching instrument by ID:', error);
-            throw error;
+            return{error};
         }
     };
     
@@ -209,7 +209,7 @@ const getAllAvailableInstruments = async () => {
             return instrument;
         } catch (error) {
             console.error('Error fetching instrument by ID:', error);
-            throw error;
+            return{error};
         }
     };
     const getEquipmentTypeDescription = async (description) => {
@@ -221,7 +221,7 @@ const getAllAvailableInstruments = async () => {
             return equipmentTypes;
         } catch (error) {
             console.error('Error fetching equipment types:', error);
-            throw error;
+            return{error};
         }
     };
 
@@ -233,7 +233,7 @@ const getAllAvailableInstruments = async () => {
             return result;
         } catch (error) {
             console.error('Error swapping cases:', error);
-            throw error;
+            return{error};
         }
     }
     const takeStock = async (location, item_id, description, number, status, created_by, notes) => {
@@ -244,7 +244,7 @@ const getAllAvailableInstruments = async () => {
             return result;
         } catch (error) {
             console.error('An Error Occurred:', error);
-            throw error;
+            return{error};
         }
     }
 

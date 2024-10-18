@@ -7,7 +7,7 @@ const getInstrumentHistory = async () => {
         return instrumentHistory;
     } catch (error) {
         console.error('Error fetching history:', error);
-        throw error;
+        return{error};
     }
  };
  const getInstrumentHistoryByDescriptionNumber = async (description, number) => { 
@@ -20,7 +20,7 @@ const getInstrumentHistory = async () => {
         return instrumentHistory;
     } catch (error) {
         console.error('Error fetching history:', error);
-        throw error;
+        return{error};
     }
  };
 
@@ -33,7 +33,7 @@ const getInstrumentHistory = async () => {
         return instrumentHistory;
     } catch (error) {
         console.error('Error fetching history:', error);
-        throw error;
+        return{error};
     }
  };
 
@@ -46,7 +46,7 @@ const getInstrumentHistory = async () => {
         return instrumentHistory;
     } catch (error) {
         console.error('Error fetching history:', error);
-        throw error;
+        return{error};
     }
  };
 
@@ -59,7 +59,7 @@ const getInstrumentHistory = async () => {
         return instrumentHistory;
     } catch (error) {
         console.error('Error fetching history:', error);
-        throw error;
+        return{error};
     }
  };
 

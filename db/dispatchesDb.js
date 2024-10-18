@@ -25,7 +25,7 @@ const getDispatchedInstrumentsBYDescriptionNumber = async (description, number) 
         return instruments;
     } catch (error) {
         console.error('Error fetching instruments:', error);
-        throw error;
+        return {error};
     }
 };
 
@@ -39,8 +39,7 @@ const getDispatchedInstrumentsBYDescription = async (description) => {
         const instruments = await query(queryText, [description]);
         return instruments;
     } catch (error) {
-        console.error('Error fetching instruments:', error);
-        throw error;
+        return { error};
     }
 };
 
@@ -55,8 +54,7 @@ const getDispatchedInstrumentsByUserIds = async (userIds) => {
         const { rows } = await pool.query(queryText, userIds);
         return rows;
     } catch (error) {
-        console.error('Error fetching dispatched instruments by user IDs:', error);
-        throw error;
+        return { error};
     }
 };
 
@@ -71,8 +69,7 @@ const getDispatchedInstrumentsByUserId = async (userId) => {
         const { rows } = await pool.query(queryText, [userId]);
         return rows;
     } catch (error) {
-        console.error('Error fetching dispatched instruments by user IDs:', error);
-        throw error;
+        return { error};
     }
 };
 const getInstrumentIdByDescriptionNumber = async (description, number) => {
@@ -86,8 +83,7 @@ const getInstrumentIdByDescriptionNumber = async (description, number) => {
             throw new Error('Instrument not found');
         }
     } catch (error) {
-        console.error('Error fetching instrument ID by description and number:', error);
-        throw error;
+        return { error};
     }
 };
 const searchUserIdsByName = async (userName) => {
@@ -100,8 +96,7 @@ const searchUserIdsByName = async (userName) => {
         const { rows } = await pool.query(queryText, [`%${userName}%`]);
         return rows.map(row => row.id);
     } catch (error) {
-        console.error('Error searching users by name:', error);
-        throw error;
+        return { error};
     }
 };
 const createDispatch = async (description,profileId,  username, number, userId) => {
@@ -117,8 +112,7 @@ const createDispatch = async (description,profileId,  username, number, userId) 
         const rows = await query(queryText, [instrumentId, profileId, username, userId]);
         return rows; 
     } catch (error) {
-        console.error('Error creating dispatch:', error);
-        throw error;
+        return { error};
     }}
 };
 
@@ -135,8 +129,7 @@ const returnInstrument = async (instrumentId, userName,  userId, formerUserId) =
         const rows = await query(queryText, [instrumentId, userName, userId, formerUserId]);
         return rows; 
     } catch (error) {
-        console.error('Error creating dispatch:', error);
-        throw error;
+        return { error};
     }
 };
 

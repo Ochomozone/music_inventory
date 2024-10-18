@@ -14,7 +14,7 @@ const { query, pool } = require('./dbCore.js');
             return rows;
         } catch (error) {
             console.error('Error creating request:', error);
-            throw error;
+            return{error};
         }
     }
 };
@@ -29,7 +29,7 @@ const getAllRequests = async () => {
         return rows;
     } catch (error) {
         console.error('Error getting all requests:', error);
-        throw error;
+        return{error};
     }
 };
 
@@ -47,7 +47,7 @@ const getUserRequests = async (userId) => {
             return rows;
         } catch (error) {
             console.error('Error getting user requests:', error);
-            throw error;
+            return{error};
         }
     }
 };
@@ -66,7 +66,7 @@ const getRequestDetails = async (uniqueId) => {
             return rows;
         } catch (error) {
             console.error('Error getting request details:', error);
-            throw error;
+            return{error};
         }
     }
 };
@@ -85,7 +85,7 @@ const deleteRequest = async (uniqueId) => {
             return rows;
         } catch (error) {
             console.error('Error deleting request:', error);
-            throw error;
+            return{error};
         }
     }
 };
@@ -106,7 +106,7 @@ const logUpdateRequest = async (status, success, notes, uniqueId, attendedBy, at
         return rows;
     } catch (error) {
         console.error('Error updating request:', error);
-        throw error;
+        return{error};
     }
 }
 const updateRequests = async (id, status, success, uniqueId, notes, attendedBy, attendedById, instrumentsGranted) => {
@@ -127,7 +127,7 @@ const updateRequests = async (id, status, success, uniqueId, notes, attendedBy, 
             return logUpdate;}
         } catch (error) {
             console.error('Error updating request:', error);
-            throw error;
+            return{error};
         }
     }
 }
