@@ -10,7 +10,17 @@ const getAllRoles = async () => {
     }
 };
 
-
+const getAllRooms = async () => {
+    const queryText = `SELECT room FROM public.locations`;
+    try {
+        const { rows } = await pool
+            .query(queryText);
+        return rows;
+    } catch (error) {
+        console.error('Error fetching rooms:', error);
+        return {error};
+    }
+};
 
 const searchStaffByNumber = async (staffNumber) => {
     const queryText = `
@@ -69,6 +79,7 @@ const getAllstaff = async () => {
         return{error};
     }
 };
+
 
 const addNewstaff = async (staff) => {
     const allRoles = await getAllRoles();
@@ -155,9 +166,11 @@ const updatestaff = async (staff) => {
     }
     if (staff.room != null) {
         staffQueryText += `room = $${queryIndex}, `;
-        staffQueryValues.push(staff.room);
+        staffQueryValues.push(staff.room.toUpperCase());
         queryIndex++;
     }
+
+    
     if (staffQueryValues.length > 0) {
         // Remove the last comma and space from the staff query text
         staffQueryText = staffQueryText.slice(0, -2);
@@ -168,8 +181,23 @@ const updatestaff = async (staff) => {
             const staffResult = await pool.query(staffQueryText, staffQueryValues);
             return staffResult.rows[0];
         } catch (error) {
+            console.error('Error updating staff:', error);
             return { error };
         }
+    }
+};
+const addNewRoom = async (department,room) => {
+    const queryText = `
+    INSERT INTO public.locations (department, room)
+    VALUES ($1, $2)
+    RETURNING *
+    `;
+    try {
+        const { rows } = await pool.query(queryText, [department, room]);
+        return rows[0];
+    } catch (error) {
+        console.error('Error adding new room:', error);
+        return { error };
     }
 };
 
@@ -182,6 +210,9 @@ module.exports = {
     searchstaffByNumber: searchStaffByNumber,
     searchstaffByUserNumber,
     addNewstaff,
-    updatestaff
+    updatestaff,
+    getAllRooms,
+    getAllRoles,
+    addNewRoom
 };
     
